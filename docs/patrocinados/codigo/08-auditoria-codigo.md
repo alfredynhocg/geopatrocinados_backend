@@ -1,8 +1,12 @@
 # Código completo — Etapa 8: Auditoría transversal
 
-> Fuente de verdad de columnas: `database/migrations/patrocinados/2026_09_01_000060_create_registros_auditoria_table.php`.
-> Estructura DDD acordada: [../08-auditoria-transversal.md](../08-auditoria-transversal.md).
-> Tabla `registros_auditoria`: PK `BIGINT` autoincremental (única excepción a UUID en el módulo), `user_id`/`dispositivo_id` UUID nullable con `onDelete('set null')`, `entidad_id` UUID nullable, `valores_anteriores`/`valores_nuevos` JSONB nullable, `direccion_ip` inet nullable, `user_agent` text nullable, solo `created_at` (tabla insert-only, sin `updated_at`).
+> Complementa [../08-auditoria-transversal.md](../08-auditoria-transversal.md). Código PHP completo, listo para copiar, de cada archivo de la "Estructura DDD" de esa etapa. Fuente de columnas: la migración real `database/migrations/patrocinados/2026_09_01_000060_create_registros_auditoria_table.php`.
+>
+> **Reglas de negocio implementadas aquí** (no reabrir sin motivo, ver `docs/patrocinados/08-auditoria-transversal.md`):
+> 1. **PK `BIGINT` autoincremental, no UUID** — única excepción intencional del módulo completo. `RegistroAuditoria` no usa `HasUuids`; usa el autoincrement estándar de Eloquent (`insertGetId()` implícito en `create()`, nunca `MAX(id)+1`).
+> 2. **Insert-only**: no hay Commands/Handlers de update/delete, ni `updated_at` (la tabla solo tiene `created_at`). El único punto de escritura es `AuditoriaService::registrar()`.
+> 3. **Nunca aborta la transacción del Handler llamante**: si el insert de auditoría falla, `AuditoriaService::registrar()` lo captura y hace `Log::error()`, pero no relanza la excepción — perder un registro de auditoría se considera preferible a bloquear una operación de negocio (a confirmar con negocio, ver criterios de aceptación del documento madre).
+> 4. `Domain/Auditoria/Exceptions/` queda sin archivos — el propio doc madre dice "ninguna necesaria" (módulo de solo lectura/escritura simple, sin reglas de negocio que puedan fallar de forma esperada).
 
 ---
 
@@ -15,37 +19,28 @@
 
 namespace App\Domain\Auditoria\Contracts;
 
-use App\Infrastructure\Auditoria\Models\RegistroAuditoria;
+use App\Shared\Kernel\DTOs\PaginationDTO;
 
 interface RegistroAuditoriaRepositoryInterface
 {
-    /**
-     * Inserta un registro de auditoría. Nunca genera el id manualmente:
-     * delega en el autoincremental BIGINT de la tabla (insertGetId vía Eloquent::create()).
-     */
-    public function create(array $data): RegistroAuditoria;
+    public function create(array $data): mixed;
 
-    /**
-     * Listado paginado con filtros. Devuelve ['data' => RegistroAuditoriaDTO[], 'total' => int]
-     * siguiendo la misma forma de respuesta que el resto del proyecto (ver CLAUDE.md).
-     */
     public function paginate(
+        PaginationDTO $pagination,
         ?string $tipoEntidad,
         ?string $entidadId,
         ?string $userId,
         ?string $desde,
         ?string $hasta,
-        int $pageIndex,
-        int $pageSize,
     ): array;
 }
 ```
 
-> No hay `Exceptions/` en este módulo — `docs/patrocinados/08-auditoria-transversal.md` lo deja explícito: es un módulo de solo escritura interna (vía `AuditoriaService`) y lectura pública, sin reglas de negocio que puedan fallar con una excepción de dominio propia.
-
 ---
 
 ## Application/Auditoria
+
+### DTOs
 
 #### `app/Application/Auditoria/DTOs/RegistroAuditoriaDTO.php`
 
@@ -91,7 +86,11 @@ final readonly class RegistroAuditoriaDTO
 }
 ```
 
+### Services
+
 #### `app/Application/Auditoria/Services/AuditoriaService.php`
+
+Contrato ya cerrado en el documento madre — implementación tal cual:
 
 ```php
 <?php
@@ -100,18 +99,35 @@ namespace App\Application\Auditoria\Services;
 
 use App\Domain\Auditoria\Contracts\RegistroAuditoriaRepositoryInterface;
 use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
- * Único punto de entrada de auditoría para los Handlers de escritura de los 6 módulos
- * del sistema de Patrocinados. Ver docs/patrocinados/08-auditoria-transversal.md
- * "Qué se audita (mínimo obligatorio por módulo)" para el catálogo de operaciones.
+ * Único punto de entrada de escritura, inyectado en los Handlers de escritura
+ * de los demás módulos. Ejemplo de uso (referencia, no un archivo real):
+ *
+ *   public function handle(RevocarDispositivoCommand $command): DispositivoDTO
+ *   {
+ *       return DB::connection('pgsql_patrocinados')->transaction(function () use ($command) {
+ *           $anterior = $this->repository->findById($command->dispositivoId);
+ *           $model = $this->repository->revocar($command->dispositivoId, $command->revokedBy);
+ *
+ *           $this->auditoria->registrar(
+ *               userId: $command->revokedBy,
+ *               dispositivoId: $command->dispositivoId,
+ *               accion: 'revocar',
+ *               modulo: 'Dispositivos',
+ *               tipoEntidad: 'dispositivo',
+ *               entidadId: $command->dispositivoId,
+ *               valoresAnteriores: ['estado' => $anterior->estado],
+ *               valoresNuevos: ['estado' => 'REVOCADO'],
+ *           );
+ *
+ *           return DispositivoDTO::fromModel($model);
+ *       });
+ *   }
  */
 class AuditoriaService
 {
-    public function __construct(
-        private readonly RegistroAuditoriaRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly RegistroAuditoriaRepositoryInterface $repository) {}
 
     public function registrar(
         ?string $userId,
@@ -124,40 +140,33 @@ class AuditoriaService
         ?array $valoresNuevos,
     ): void {
         try {
-            // insertGetId vía Eloquent::create() — nunca MAX(id)+1, misma regla irrompible
-            // que el resto del proyecto (ver CLAUDE.md, módulo Pagos).
             $this->repository->create([
-                'user_id' => $userId,
-                'dispositivo_id' => $dispositivoId,
-                'accion' => $accion,
-                'modulo' => $modulo,
-                'tipo_entidad' => $tipoEntidad,
-                'entidad_id' => $entidadId,
-                'valores_anteriores' => $valoresAnteriores,
-                'valores_nuevos' => $valoresNuevos,
-                'direccion_ip' => request()?->ip(),
-                'user_agent' => request()?->userAgent(),
+                'user_id'             => $userId,
+                'dispositivo_id'      => $dispositivoId,
+                'accion'              => $accion,
+                'modulo'              => $modulo,
+                'tipo_entidad'        => $tipoEntidad,
+                'entidad_id'          => $entidadId,
+                'valores_anteriores'  => $valoresAnteriores,
+                'valores_nuevos'      => $valoresNuevos,
+                'direccion_ip'        => request()?->ip(),
+                'user_agent'          => request()?->userAgent(),
             ]);
-        } catch (Throwable $e) {
-            // DECISIÓN PENDIENTE (ver docs/patrocinados/08-auditoria-transversal.md, Criterios de
-            // aceptación): confirmar con negocio si perder un registro de auditoría es aceptable
-            // antes que bloquear la operación principal, o si AuditoriaService debe relanzar la
-            // excepción para abortar la transacción del Handler que la llamó.
+        } catch (\Throwable $e) {
+            // Deliberado: un fallo al auditar no debe abortar la operación de
+            // negocio que lo disparó. Si negocio exige auditoría obligatoria,
+            // cambiar este catch por un re-throw.
             Log::error('AuditoriaService: fallo al registrar auditoría', [
-                'user_id' => $userId,
-                'dispositivo_id' => $dispositivoId,
-                'accion' => $accion,
-                'modulo' => $modulo,
-                'tipo_entidad' => $tipoEntidad,
-                'entidad_id' => $entidadId,
-                'valores_anteriores' => $valoresAnteriores,
-                'valores_nuevos' => $valoresNuevos,
-                'exception' => $e->getMessage(),
+                'accion'  => $accion,
+                'modulo'  => $modulo,
+                'error'   => $e->getMessage(),
             ]);
         }
     }
 }
 ```
+
+### Queries
 
 #### `app/Application/Auditoria/Queries/GetRegistrosAuditoriaQuery.php`
 
@@ -166,19 +175,22 @@ class AuditoriaService
 
 namespace App\Application\Auditoria\Queries;
 
+use App\Shared\Kernel\DTOs\PaginationDTO;
+
 final readonly class GetRegistrosAuditoriaQuery
 {
     public function __construct(
-        public ?string $tipoEntidad = null,
-        public ?string $entidadId = null,
-        public ?string $userId = null,
+        public PaginationDTO $pagination,
+        public ?string $tipo_entidad = null,
+        public ?string $entidad_id = null,
+        public ?string $user_id = null,
         public ?string $desde = null,
         public ?string $hasta = null,
-        public int $pageIndex = 1,
-        public int $pageSize = 15,
     ) {}
 }
 ```
+
+### QueryHandlers
 
 #### `app/Application/Auditoria/QueryHandlers/GetRegistrosAuditoriaQueryHandler.php`
 
@@ -187,26 +199,29 @@ final readonly class GetRegistrosAuditoriaQuery
 
 namespace App\Application\Auditoria\QueryHandlers;
 
+use App\Application\Auditoria\DTOs\RegistroAuditoriaDTO;
 use App\Application\Auditoria\Queries\GetRegistrosAuditoriaQuery;
 use App\Domain\Auditoria\Contracts\RegistroAuditoriaRepositoryInterface;
 
 class GetRegistrosAuditoriaQueryHandler
 {
-    public function __construct(
-        private readonly RegistroAuditoriaRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly RegistroAuditoriaRepositoryInterface $repository) {}
 
     public function handle(GetRegistrosAuditoriaQuery $query): array
     {
-        return $this->repository->paginate(
-            tipoEntidad: $query->tipoEntidad,
-            entidadId: $query->entidadId,
-            userId: $query->userId,
-            desde: $query->desde,
-            hasta: $query->hasta,
-            pageIndex: $query->pageIndex,
-            pageSize: $query->pageSize,
+        $paginated = $this->repository->paginate(
+            $query->pagination,
+            $query->tipo_entidad,
+            $query->entidad_id,
+            $query->user_id,
+            $query->desde,
+            $query->hasta,
         );
+
+        return [
+            'data'  => collect($paginated['data'])->map(fn (object $m) => RegistroAuditoriaDTO::fromModel($m))->all(),
+            'total' => $paginated['total'],
+        ];
     }
 }
 ```
@@ -214,6 +229,8 @@ class GetRegistrosAuditoriaQueryHandler
 ---
 
 ## Infrastructure/Auditoria
+
+### Models
 
 #### `app/Infrastructure/Auditoria/Models/RegistroAuditoria.php`
 
@@ -225,37 +242,31 @@ namespace App\Infrastructure\Auditoria\Models;
 use App\Infrastructure\Patrocinados\Concerns\UsaConexionPatrocinados;
 use Illuminate\Database\Eloquent\Model;
 
+/**
+ * Única tabla del módulo con PK bigint autoincremental (no UUID) — insert-only
+ * de alto volumen, sin updated_at.
+ */
 class RegistroAuditoria extends Model
 {
     use UsaConexionPatrocinados;
 
+    public const UPDATED_AT = null;
+
     protected $table = 'registros_auditoria';
 
-    // Tabla insert-only: solo existe created_at en el schema, no updated_at.
-    const UPDATED_AT = null;
-
     protected $fillable = [
-        'user_id',
-        'dispositivo_id',
-        'accion',
-        'modulo',
-        'tipo_entidad',
-        'entidad_id',
-        'valores_anteriores',
-        'valores_nuevos',
-        'direccion_ip',
-        'user_agent',
+        'user_id', 'dispositivo_id', 'accion', 'modulo', 'tipo_entidad', 'entidad_id',
+        'valores_anteriores', 'valores_nuevos', 'direccion_ip', 'user_agent',
     ];
 
     protected $casts = [
         'valores_anteriores' => 'array',
-        'valores_nuevos' => 'array',
-        'created_at' => 'datetime',
+        'valores_nuevos'     => 'array',
     ];
 }
 ```
 
-> No usa `HasUuids` (PK autoincremental estándar) ni `SoftDeletes` (tabla insert-only, nunca se borra un registro de auditoría) — a diferencia del resto de modelos del módulo. Ver `app/Infrastructure/Patrocinados/Concerns/UsaConexionPatrocinados.php` (Etapa 1) para el trait de conexión.
+### Repositories
 
 #### `app/Infrastructure/Auditoria/Repositories/EloquentRegistroAuditoriaRepository.php`
 
@@ -264,25 +275,24 @@ class RegistroAuditoria extends Model
 
 namespace App\Infrastructure\Auditoria\Repositories;
 
-use App\Application\Auditoria\DTOs\RegistroAuditoriaDTO;
 use App\Domain\Auditoria\Contracts\RegistroAuditoriaRepositoryInterface;
 use App\Infrastructure\Auditoria\Models\RegistroAuditoria;
+use App\Shared\Kernel\DTOs\PaginationDTO;
 
 class EloquentRegistroAuditoriaRepository implements RegistroAuditoriaRepositoryInterface
 {
-    public function create(array $data): RegistroAuditoria
+    public function create(array $data): mixed
     {
         return RegistroAuditoria::create($data);
     }
 
     public function paginate(
+        PaginationDTO $pagination,
         ?string $tipoEntidad,
         ?string $entidadId,
         ?string $userId,
         ?string $desde,
         ?string $hasta,
-        int $pageIndex,
-        int $pageSize,
     ): array {
         $q = RegistroAuditoria::query();
 
@@ -302,15 +312,10 @@ class EloquentRegistroAuditoriaRepository implements RegistroAuditoriaRepository
             $q->where('created_at', '<=', $hasta);
         }
 
-        $paginated = $q->orderBy('created_at', 'desc')
-            ->paginate($pageSize, ['*'], 'page', $pageIndex);
+        $paginated = $q->orderByDesc('created_at')
+            ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
-        return [
-            'data' => collect($paginated->items())
-                ->map(fn ($r) => RegistroAuditoriaDTO::fromModel($r))
-                ->all(),
-            'total' => $paginated->total(),
-        ];
+        return ['data' => $paginated->items(), 'total' => $paginated->total()];
     }
 }
 ```
@@ -319,38 +324,7 @@ class EloquentRegistroAuditoriaRepository implements RegistroAuditoriaRepository
 
 ## Http
 
-#### `app/Http/Requests/Patrocinados/Auditoria/IndexRegistroAuditoriaRequest.php`
-
-```php
-<?php
-
-namespace App\Http\Requests\Patrocinados\Auditoria;
-
-use Illuminate\Foundation\Http\FormRequest;
-
-class IndexRegistroAuditoriaRequest extends FormRequest
-{
-    public function authorize(): bool
-    {
-        // Autorización real vía middleware ->middleware('permiso-patrocinados:auditoria.ver')
-        // en routes/api/patrocinados.php — este FormRequest solo valida forma de los filtros.
-        return true;
-    }
-
-    public function rules(): array
-    {
-        return [
-            'tipo_entidad' => ['sometimes', 'nullable', 'string', 'max:100'],
-            'entidad_id'   => ['sometimes', 'nullable', 'uuid'],
-            'user_id'      => ['sometimes', 'nullable', 'uuid'],
-            'desde'        => ['sometimes', 'nullable', 'date'],
-            'hasta'        => ['sometimes', 'nullable', 'date', 'after_or_equal:desde'],
-            'pageIndex'    => ['sometimes', 'integer', 'min:1'],
-            'pageSize'     => ['sometimes', 'integer', 'min:1', 'max:100'],
-        ];
-    }
-}
-```
+### Controllers
 
 #### `app/Http/Controllers/Api/Patrocinados/RegistroAuditoriaController.php`
 
@@ -359,40 +333,42 @@ class IndexRegistroAuditoriaRequest extends FormRequest
 
 namespace App\Http\Controllers\Api\Patrocinados;
 
-use App\Application\Auditoria\QueryHandlers\GetRegistrosAuditoriaQueryHandler;
 use App\Application\Auditoria\Queries\GetRegistrosAuditoriaQuery;
+use App\Application\Auditoria\QueryHandlers\GetRegistrosAuditoriaQueryHandler;
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Patrocinados\Auditoria\IndexRegistroAuditoriaRequest;
+use App\Shared\Kernel\DTOs\PaginationDTO;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
-/**
- * Solo lectura — sin store/update/destroy. Los registros de auditoría se crean
- * exclusivamente vía AuditoriaService::registrar() desde los Handlers de otros módulos.
- */
+/** Solo lectura — sin store/update/destroy, la tabla es insert-only vía AuditoriaService. */
 class RegistroAuditoriaController extends Controller
 {
-    public function __construct(
-        private readonly GetRegistrosAuditoriaQueryHandler $getRegistrosHandler,
-    ) {}
+    public function __construct(private readonly GetRegistrosAuditoriaQueryHandler $getRegistrosHandler) {}
 
-    public function index(IndexRegistroAuditoriaRequest $request): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $query = new GetRegistrosAuditoriaQuery(
-            tipoEntidad: $request->get('tipo_entidad'),
-            entidadId: $request->get('entidad_id'),
-            userId: $request->get('user_id'),
+        $pagination = PaginationDTO::fromArray($request->all());
+
+        return response()->json($this->getRegistrosHandler->handle(new GetRegistrosAuditoriaQuery(
+            pagination: $pagination,
+            tipo_entidad: $request->get('tipo_entidad'),
+            entidad_id: $request->get('entidad_id'),
+            user_id: $request->get('user_id'),
             desde: $request->get('desde'),
             hasta: $request->get('hasta'),
-            pageIndex: (int) $request->get('pageIndex', 1),
-            pageSize: (int) $request->get('pageSize', 15),
-        );
-
-        return response()->json($this->getRegistrosHandler->handle($query));
+        )));
     }
 }
 ```
 
 ---
+
+## Rutas de referencia (para `routes/api/patrocinados.php`, se cablean formalmente en la Etapa 1/9)
+
+```php
+Route::get('/registros-auditoria', [RegistroAuditoriaController::class, 'index'])
+    ->middleware('permiso-patrocinados:auditoria.ver');
+```
 
 ## Binding en el ServiceProvider del módulo
 
@@ -403,46 +379,3 @@ $this->app->bind(
     \App\Infrastructure\Auditoria\Repositories\EloquentRegistroAuditoriaRepository::class,
 );
 ```
-
-`AuditoriaService` no requiere binding explícito: Laravel lo resuelve por autowiring (tiene un único constructor con una dependencia ya bindeada).
-
----
-
-## Ejemplo de uso desde un Handler de otro módulo
-
-Reproducido de `docs/patrocinados/08-auditoria-transversal.md` — cualquier Handler de escritura de las Etapas 2-7 inyecta `AuditoriaService` igual que inyecta su repositorio:
-
-```php
-// app/Application/Dispositivos/Handlers/RevocarDispositivoHandler.php
-class RevocarDispositivoHandler
-{
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository,
-        private readonly AuditoriaService $auditoria,
-    ) {}
-
-    public function handle(RevocarDispositivoCommand $command): DispositivoDTO
-    {
-        return DB::connection('pgsql_patrocinados')->transaction(function () use ($command) {
-            $anterior = $this->repository->findById($command->dispositivoId);
-
-            $model = $this->repository->revocar($command->dispositivoId, $command->revokedBy);
-
-            $this->auditoria->registrar(
-                userId: $command->revokedBy,
-                dispositivoId: $command->dispositivoId,
-                accion: 'revocar',
-                modulo: 'Dispositivos',
-                tipoEntidad: 'dispositivo',
-                entidadId: $command->dispositivoId,
-                valoresAnteriores: ['estado' => $anterior->estado],
-                valoresNuevos: ['estado' => 'REVOCADO'],
-            );
-
-            return DispositivoDTO::fromModel($model);
-        });
-    }
-}
-```
-
-Regla general: la llamada a `$this->auditoria->registrar()` va **dentro** de la misma `DB::transaction()` que la escritura de negocio (no después, no en un `finally`) — así, si la transacción hace rollback por otro motivo, el intento de auditoría también se revierte y no queda un registro huérfano de una operación que nunca se confirmó.

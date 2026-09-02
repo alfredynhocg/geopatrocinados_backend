@@ -60,6 +60,22 @@ Las etapas 3 y 4 no dependen entre sí y pueden implementarse en paralelo por do
 
 Los 9 archivos de arriba cubren la arquitectura de aplicación (Domain/Application/Infrastructure/Http). El **DDL exacto** de las 25 tablas — código de migración de Laravel listo para copiar, columna por columna, con `CHECK constraints`, índices únicos parciales e índices `GIST` — está en **[migraciones/00-indice.md](migraciones/00-indice.md)**, organizado por las mismas 8 fases (0 a 7) del plan de revisión.
 
+## Código PHP completo por módulo (carpeta `codigo/`)
+
+Cada uno de los 6 módulos DDD + Auditoría transversal tiene, además de su documento de estructura (02 a 08 de arriba), un archivo hermano en `codigo/` con el código PHP **completo** (clases reales, no solo nombres de archivo) de todo Domain/Application/Infrastructure/Http de esa etapa, extraído columna por columna de las migraciones reales:
+
+| Etapa | Documento de código |
+|---|---|
+| 2 — AccesoPatrocinados | [codigo/02-acceso-patrocinados-codigo.md](codigo/02-acceso-patrocinados-codigo.md) |
+| 3 — Geografía | [codigo/03-geografia-codigo.md](codigo/03-geografia-codigo.md) |
+| 4 — Dispositivos | [codigo/04-dispositivos-codigo.md](codigo/04-dispositivos-codigo.md) |
+| 5 — Patrocinados | [codigo/05-patrocinados-codigo.md](codigo/05-patrocinados-codigo.md) |
+| 6 — Visitas | [codigo/06-visitas-codigo.md](codigo/06-visitas-codigo.md) |
+| 7 — Sincronización | [codigo/07-sincronizacion-codigo.md](codigo/07-sincronizacion-codigo.md) |
+| 8 — Auditoría transversal | [codigo/08-auditoria-codigo.md](codigo/08-auditoria-codigo.md) |
+
+Es código de planificación para revisar, no implementado todavía en `app/` — ver "Siguiente paso sugerido" en `PLAN_INTEGRACION_PATROCINADOS.md` antes de copiarlo al proyecto real.
+
 ## Definition of Done global del módulo
 
 - Las 25 tablas migradas en `pgsql_patrocinados` en el orden de dependencias documentado.

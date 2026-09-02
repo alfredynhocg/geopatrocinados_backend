@@ -135,8 +135,4 @@ Registrar el alias en `bootstrap/app.php` junto al resto de middlewares.
 
 ## Código completo
 
-Ver [codigo/02-acceso-patrocinados-codigo.md](codigo/02-acceso-patrocinados-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa, el middleware `PermisoPatrocinadosMiddleware`, el seeder inicial y el extracto de rutas.
-
-## Código completo
-
-Ver [codigo/02-acceso-patrocinados-codigo.md](codigo/02-acceso-patrocinados-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.
+Ver [codigo/02-acceso-patrocinados-codigo.md](codigo/02-acceso-patrocinados-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa, el middleware `PermisoPatrocinadosMiddleware` y el extracto de rutas.

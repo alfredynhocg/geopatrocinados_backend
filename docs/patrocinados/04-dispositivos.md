@@ -92,7 +92,3 @@ POST    /api/v1/patrocinados/dispositivos/{id}/revocar     permiso-patrocinados:
 ## Código completo
 
 Ver [codigo/04-dispositivos-codigo.md](codigo/04-dispositivos-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.
-
-## Código completo
-
-Ver [codigo/04-dispositivos-codigo.md](codigo/04-dispositivos-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

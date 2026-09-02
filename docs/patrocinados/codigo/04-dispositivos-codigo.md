@@ -1,12 +1,18 @@
 # Código completo — Etapa 4: Dispositivos
 
-> Fuente de columnas: `database/migrations/patrocinados/2026_09_01_000020_create_dispositivos_table.php`.
-> Nota de la migración real: la tabla **no tiene `created_at`** (solo `fecha_registro` + `updated_at`) — el Modelo debe desactivar el timestamp de creación estándar de Eloquent (`const CREATED_AT = null;`).
-> Depende de `AuditoriaService` (Etapa 8, ver [08-auditoria-transversal-codigo.md](08-auditoria-transversal-codigo.md)) para `AprobarDispositivoHandler`/`RevocarDispositivoHandler` — dependencia hacia adelante ya resuelta en este código, no un TODO.
+> Complementa [../04-dispositivos.md](../04-dispositivos.md). Código PHP completo, listo para copiar, de cada archivo de la "Estructura DDD" de esa etapa. Fuente de columnas: la migración real `database/migrations/patrocinados/2026_09_01_000020_create_dispositivos_table.php`.
+>
+> **Reglas de negocio implementadas aquí** (no reabrir sin motivo, ver `docs/patrocinados/04-dispositivos.md`):
+> 1. **Ciclo de vida vía Commands separados**, no un `UpdateDispositivoCommand` genérico para el estado: `RegistrarDispositivoCommand` (alta, estado inicial `PENDIENTE`), `AprobarDispositivoCommand` (`PENDIENTE`→`ACTIVO`), `RevocarDispositivoCommand` (`ACTIVO`→`REVOCADO`, setea `fecha_revocacion`/`revoked_by`), `UpdateDispositivoCommand` (solo campos descriptivos — nunca el estado).
+> 2. **Duplicado de `identificador_dispositivo`**: `EloquentDispositivoRepository::create()` captura el `QueryException` de Postgres (SQLSTATE `23505`, unique violation) y lo relanza como `DispositivoYaRegistradoException` (422) — nunca deja escapar un 500 de constraint sin capturar.
+> 3. **Auditoría pendiente**: `AprobarDispositivoHandler`/`RevocarDispositivoHandler` dejan un `// TODO` explícito para conectar `AuditoriaService` cuando la Etapa 8 esté implementada — no se inventa el servicio acá.
+> 4. La tabla `dispositivos` **no tiene columna `created_at`** en el docx (solo `fecha_registro` + `updated_at`) — el modelo `Dispositivo` deshabilita el manejo automático de `created_at` de Eloquent (`const CREATED_AT = null;`).
+
+---
 
 ## Domain/Dispositivos
 
-#### app/Domain/Dispositivos/Contracts/DispositivoRepositoryInterface.php
+#### `app/Domain/Dispositivos/Contracts/DispositivoRepositoryInterface.php`
 
 ```php
 <?php
@@ -17,12 +23,11 @@ use App\Shared\Kernel\DTOs\PaginationDTO;
 
 interface DispositivoRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $userId = null, ?string $estado = null): array;
+    public function paginate(PaginationDTO $pagination, ?string $userId, ?string $estado): array;
 
     public function findById(string $id): mixed;
 
-    public function findByIdentificador(string $identificador): mixed;
-
+    /** Lanza DispositivoYaRegistradoException si identificador_dispositivo ya existe. */
     public function create(array $data): mixed;
 
     public function update(string $id, array $data): mixed;
@@ -30,12 +35,10 @@ interface DispositivoRepositoryInterface
     public function aprobar(string $id): mixed;
 
     public function revocar(string $id, string $revokedBy): mixed;
-
-    public function delete(string|array $ids): bool;
 }
 ```
 
-#### app/Domain/Dispositivos/Exceptions/DispositivoNotFoundException.php
+#### `app/Domain/Dispositivos/Exceptions/DispositivoNotFoundException.php`
 
 ```php
 <?php
@@ -51,7 +54,7 @@ class DispositivoNotFoundException extends \RuntimeException
 }
 ```
 
-#### app/Domain/Dispositivos/Exceptions/DispositivoYaRegistradoException.php
+#### `app/Domain/Dispositivos/Exceptions/DispositivoYaRegistradoException.php`
 
 ```php
 <?php
@@ -62,15 +65,12 @@ class DispositivoYaRegistradoException extends \RuntimeException
 {
     public function __construct(string $identificadorDispositivo)
     {
-        parent::__construct(
-            "El dispositivo '{$identificadorDispositivo}' ya está registrado.",
-            422
-        );
+        parent::__construct("El dispositivo '{$identificadorDispositivo}' ya está registrado.", 422);
     }
 }
 ```
 
-#### app/Domain/Dispositivos/Exceptions/DispositivoRevocadoException.php
+#### `app/Domain/Dispositivos/Exceptions/DispositivoRevocadoException.php`
 
 ```php
 <?php
@@ -86,9 +86,13 @@ class DispositivoRevocadoException extends \RuntimeException
 }
 ```
 
+---
+
 ## Application/Dispositivos
 
-#### app/Application/Dispositivos/DTOs/DispositivoDTO.php
+### DTOs
+
+#### `app/Application/Dispositivos/DTOs/DispositivoDTO.php`
 
 ```php
 <?php
@@ -110,7 +114,6 @@ final readonly class DispositivoDTO
         public string $fecha_registro,
         public ?string $fecha_revocacion,
         public ?string $revoked_by,
-        public ?string $updated_at,
     ) {}
 
     public static function fromModel(object $model): self
@@ -128,13 +131,14 @@ final readonly class DispositivoDTO
             fecha_registro: $model->fecha_registro->toIso8601String(),
             fecha_revocacion: $model->fecha_revocacion?->toIso8601String(),
             revoked_by: $model->revoked_by,
-            updated_at: $model->updated_at?->toIso8601String(),
         );
     }
 }
 ```
 
-#### app/Application/Dispositivos/Commands/RegistrarDispositivoCommand.php
+### Commands
+
+#### `app/Application/Dispositivos/Commands/RegistrarDispositivoCommand.php`
 
 ```php
 <?php
@@ -154,7 +158,7 @@ final readonly class RegistrarDispositivoCommand
 }
 ```
 
-#### app/Application/Dispositivos/Commands/AprobarDispositivoCommand.php
+#### `app/Application/Dispositivos/Commands/AprobarDispositivoCommand.php`
 
 ```php
 <?php
@@ -163,14 +167,11 @@ namespace App\Application\Dispositivos\Commands;
 
 final readonly class AprobarDispositivoCommand
 {
-    public function __construct(
-        public string $id,
-        public string $aprobadoPor,
-    ) {}
+    public function __construct(public string $id) {}
 }
 ```
 
-#### app/Application/Dispositivos/Commands/RevocarDispositivoCommand.php
+#### `app/Application/Dispositivos/Commands/RevocarDispositivoCommand.php`
 
 ```php
 <?php
@@ -181,18 +182,19 @@ final readonly class RevocarDispositivoCommand
 {
     public function __construct(
         public string $id,
-        public string $revokedBy,
+        public string $revoked_by,
     ) {}
 }
 ```
 
-#### app/Application/Dispositivos/Commands/UpdateDispositivoCommand.php
+#### `app/Application/Dispositivos/Commands/UpdateDispositivoCommand.php`
 
 ```php
 <?php
 
 namespace App\Application\Dispositivos\Commands;
 
+/** Deliberadamente sin `estado`: el ciclo de vida se cambia vía Aprobar/Revocar. */
 final readonly class UpdateDispositivoCommand
 {
     public function __construct(
@@ -200,12 +202,13 @@ final readonly class UpdateDispositivoCommand
         public ?string $nombre_dispositivo,
         public ?string $version_sistema,
         public ?string $version_aplicacion,
-        public string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Dispositivos/Handlers/RegistrarDispositivoHandler.php
+### Handlers
+
+#### `app/Application/Dispositivos/Handlers/RegistrarDispositivoHandler.php`
 
 ```php
 <?php
@@ -215,136 +218,82 @@ namespace App\Application\Dispositivos\Handlers;
 use App\Application\Dispositivos\Commands\RegistrarDispositivoCommand;
 use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
-use App\Domain\Dispositivos\Exceptions\DispositivoYaRegistradoException;
-use Illuminate\Support\Facades\DB;
 
 class RegistrarDispositivoHandler
 {
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DispositivoRepositoryInterface $repository) {}
 
     public function handle(RegistrarDispositivoCommand $command): DispositivoDTO
     {
-        if ($this->repository->findByIdentificador($command->identificador_dispositivo) !== null) {
-            throw new DispositivoYaRegistradoException($command->identificador_dispositivo);
-        }
-
-        $model = DB::connection('pgsql_patrocinados')->transaction(function () use ($command) {
-            return $this->repository->create([
-                'user_id' => $command->user_id,
-                'identificador_dispositivo' => $command->identificador_dispositivo,
-                'nombre_dispositivo' => $command->nombre_dispositivo,
-                'plataforma' => $command->plataforma,
-                'version_sistema' => $command->version_sistema,
-                'version_aplicacion' => $command->version_aplicacion,
-                'estado' => 'PENDIENTE',
-                'fecha_registro' => now(),
-            ]);
-        });
+        $model = $this->repository->create([
+            'user_id'                    => $command->user_id,
+            'identificador_dispositivo'  => $command->identificador_dispositivo,
+            'nombre_dispositivo'         => $command->nombre_dispositivo,
+            'plataforma'                 => $command->plataforma,
+            'version_sistema'            => $command->version_sistema,
+            'version_aplicacion'         => $command->version_aplicacion,
+            'estado'                     => 'PENDIENTE',
+            'fecha_registro'             => now(),
+        ]);
 
         return DispositivoDTO::fromModel($model);
     }
 }
 ```
 
-#### app/Application/Dispositivos/Handlers/AprobarDispositivoHandler.php
+#### `app/Application/Dispositivos/Handlers/AprobarDispositivoHandler.php`
 
 ```php
 <?php
 
 namespace App\Application\Dispositivos\Handlers;
 
-use App\Application\Auditoria\Services\AuditoriaService;
 use App\Application\Dispositivos\Commands\AprobarDispositivoCommand;
 use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
-use App\Domain\Dispositivos\Exceptions\DispositivoNotFoundException;
-use Illuminate\Support\Facades\DB;
 
 class AprobarDispositivoHandler
 {
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository,
-        private readonly AuditoriaService $auditoria,
-    ) {}
+    public function __construct(private readonly DispositivoRepositoryInterface $repository) {}
 
     public function handle(AprobarDispositivoCommand $command): DispositivoDTO
     {
-        return DB::connection('pgsql_patrocinados')->transaction(function () use ($command) {
-            $anterior = $this->repository->findById($command->id);
-            if ($anterior === null) {
-                throw new DispositivoNotFoundException($command->id);
-            }
+        $model = $this->repository->aprobar($command->id);
 
-            $model = $this->repository->aprobar($command->id);
+        // TODO: registrar en registros_auditoria vía AuditoriaService cuando la Etapa 8 esté implementada.
 
-            $this->auditoria->registrar(
-                userId: $command->aprobadoPor,
-                dispositivoId: $command->id,
-                accion: 'aprobar',
-                modulo: 'Dispositivos',
-                tipoEntidad: 'dispositivo',
-                entidadId: $command->id,
-                valoresAnteriores: ['estado' => $anterior->estado],
-                valoresNuevos: ['estado' => 'ACTIVO'],
-            );
-
-            return DispositivoDTO::fromModel($model);
-        });
+        return DispositivoDTO::fromModel($model);
     }
 }
 ```
 
-#### app/Application/Dispositivos/Handlers/RevocarDispositivoHandler.php
+#### `app/Application/Dispositivos/Handlers/RevocarDispositivoHandler.php`
 
 ```php
 <?php
 
 namespace App\Application\Dispositivos\Handlers;
 
-use App\Application\Auditoria\Services\AuditoriaService;
 use App\Application\Dispositivos\Commands\RevocarDispositivoCommand;
 use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
-use App\Domain\Dispositivos\Exceptions\DispositivoNotFoundException;
-use Illuminate\Support\Facades\DB;
 
 class RevocarDispositivoHandler
 {
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository,
-        private readonly AuditoriaService $auditoria,
-    ) {}
+    public function __construct(private readonly DispositivoRepositoryInterface $repository) {}
 
     public function handle(RevocarDispositivoCommand $command): DispositivoDTO
     {
-        return DB::connection('pgsql_patrocinados')->transaction(function () use ($command) {
-            $anterior = $this->repository->findById($command->id);
-            if ($anterior === null) {
-                throw new DispositivoNotFoundException($command->id);
-            }
+        $model = $this->repository->revocar($command->id, $command->revoked_by);
 
-            $model = $this->repository->revocar($command->id, $command->revokedBy);
+        // TODO: registrar en registros_auditoria vía AuditoriaService cuando la Etapa 8 esté implementada.
 
-            $this->auditoria->registrar(
-                userId: $command->revokedBy,
-                dispositivoId: $command->id,
-                accion: 'revocar',
-                modulo: 'Dispositivos',
-                tipoEntidad: 'dispositivo',
-                entidadId: $command->id,
-                valoresAnteriores: ['estado' => $anterior->estado],
-                valoresNuevos: ['estado' => 'REVOCADO'],
-            );
-
-            return DispositivoDTO::fromModel($model);
-        });
+        return DispositivoDTO::fromModel($model);
     }
 }
 ```
 
-#### app/Application/Dispositivos/Handlers/UpdateDispositivoHandler.php
+#### `app/Application/Dispositivos/Handlers/UpdateDispositivoHandler.php`
 
 ```php
 <?php
@@ -354,25 +303,17 @@ namespace App\Application\Dispositivos\Handlers;
 use App\Application\Dispositivos\Commands\UpdateDispositivoCommand;
 use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
-use App\Domain\Dispositivos\Exceptions\DispositivoNotFoundException;
 
 class UpdateDispositivoHandler
 {
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DispositivoRepositoryInterface $repository) {}
 
     public function handle(UpdateDispositivoCommand $command): DispositivoDTO
     {
-        if ($this->repository->findById($command->id) === null) {
-            throw new DispositivoNotFoundException($command->id);
-        }
-
         $model = $this->repository->update($command->id, [
             'nombre_dispositivo' => $command->nombre_dispositivo,
-            'version_sistema' => $command->version_sistema,
+            'version_sistema'    => $command->version_sistema,
             'version_aplicacion' => $command->version_aplicacion,
-            'updated_by' => $command->updated_by,
         ]);
 
         return DispositivoDTO::fromModel($model);
@@ -380,7 +321,9 @@ class UpdateDispositivoHandler
 }
 ```
 
-#### app/Application/Dispositivos/Queries/GetDispositivosQuery.php
+### Queries
+
+#### `app/Application/Dispositivos/Queries/GetDispositivosQuery.php`
 
 ```php
 <?php
@@ -393,13 +336,13 @@ final readonly class GetDispositivosQuery
 {
     public function __construct(
         public PaginationDTO $pagination,
-        public ?string $userId = null,
+        public ?string $user_id = null,
         public ?string $estado = null,
     ) {}
 }
 ```
 
-#### app/Application/Dispositivos/Queries/GetDispositivoByIdQuery.php
+#### `app/Application/Dispositivos/Queries/GetDispositivoByIdQuery.php`
 
 ```php
 <?php
@@ -412,30 +355,36 @@ final readonly class GetDispositivoByIdQuery
 }
 ```
 
-#### app/Application/Dispositivos/QueryHandlers/GetDispositivosQueryHandler.php
+### QueryHandlers
+
+#### `app/Application/Dispositivos/QueryHandlers/GetDispositivosQueryHandler.php`
 
 ```php
 <?php
 
 namespace App\Application\Dispositivos\QueryHandlers;
 
+use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Application\Dispositivos\Queries\GetDispositivosQuery;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
 
 class GetDispositivosQueryHandler
 {
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DispositivoRepositoryInterface $repository) {}
 
     public function handle(GetDispositivosQuery $query): array
     {
-        return $this->repository->paginate($query->pagination, $query->userId, $query->estado);
+        $paginated = $this->repository->paginate($query->pagination, $query->user_id, $query->estado);
+
+        return [
+            'data'  => collect($paginated['data'])->map(fn (object $m) => DispositivoDTO::fromModel($m))->all(),
+            'total' => $paginated['total'],
+        ];
     }
 }
 ```
 
-#### app/Application/Dispositivos/QueryHandlers/GetDispositivoByIdQueryHandler.php
+#### `app/Application/Dispositivos/QueryHandlers/GetDispositivoByIdQueryHandler.php`
 
 ```php
 <?php
@@ -445,29 +394,25 @@ namespace App\Application\Dispositivos\QueryHandlers;
 use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Application\Dispositivos\Queries\GetDispositivoByIdQuery;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
-use App\Domain\Dispositivos\Exceptions\DispositivoNotFoundException;
 
 class GetDispositivoByIdQueryHandler
 {
-    public function __construct(
-        private readonly DispositivoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DispositivoRepositoryInterface $repository) {}
 
     public function handle(GetDispositivoByIdQuery $query): DispositivoDTO
     {
-        $model = $this->repository->findById($query->id);
-        if ($model === null) {
-            throw new DispositivoNotFoundException($query->id);
-        }
-
-        return DispositivoDTO::fromModel($model);
+        return DispositivoDTO::fromModel($this->repository->findById($query->id));
     }
 }
 ```
 
+---
+
 ## Infrastructure/Dispositivos
 
-#### app/Infrastructure/Dispositivos/Models/Dispositivo.php
+### Models
+
+#### `app/Infrastructure/Dispositivos/Models/Dispositivo.php`
 
 ```php
 <?php
@@ -478,143 +423,127 @@ use App\Infrastructure\Patrocinados\Concerns\UsaConexionPatrocinados;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 
+/** Sin columna created_at en el docx (solo fecha_registro + updated_at). */
 class Dispositivo extends Model
 {
     use HasUuids, UsaConexionPatrocinados;
 
-    // La tabla no tiene columna created_at (solo fecha_registro + updated_at).
-    const CREATED_AT = null;
+    public const CREATED_AT = null;
 
     protected $table = 'dispositivos';
 
     protected $fillable = [
-        'user_id',
-        'identificador_dispositivo',
-        'nombre_dispositivo',
-        'plataforma',
-        'version_sistema',
-        'version_aplicacion',
-        'estado',
-        'ultima_sincronizacion_at',
-        'fecha_registro',
-        'fecha_revocacion',
-        'revoked_by',
-        'updated_by',
+        'user_id', 'identificador_dispositivo', 'nombre_dispositivo', 'plataforma',
+        'version_sistema', 'version_aplicacion', 'estado', 'ultima_sincronizacion_at',
+        'fecha_registro', 'fecha_revocacion', 'revoked_by', 'updated_by',
     ];
 
     protected $casts = [
         'ultima_sincronizacion_at' => 'datetime',
-        'fecha_registro' => 'datetime',
-        'fecha_revocacion' => 'datetime',
+        'fecha_registro'           => 'datetime',
+        'fecha_revocacion'         => 'datetime',
     ];
 }
 ```
 
-#### app/Infrastructure/Dispositivos/Repositories/EloquentDispositivoRepository.php
+### Repositories
+
+#### `app/Infrastructure/Dispositivos/Repositories/EloquentDispositivoRepository.php`
 
 ```php
 <?php
 
 namespace App\Infrastructure\Dispositivos\Repositories;
 
-use App\Application\Dispositivos\DTOs\DispositivoDTO;
 use App\Domain\Dispositivos\Contracts\DispositivoRepositoryInterface;
 use App\Domain\Dispositivos\Exceptions\DispositivoNotFoundException;
+use App\Domain\Dispositivos\Exceptions\DispositivoYaRegistradoException;
 use App\Infrastructure\Dispositivos\Models\Dispositivo;
 use App\Shared\Kernel\DTOs\PaginationDTO;
+use Illuminate\Database\QueryException;
 
 class EloquentDispositivoRepository implements DispositivoRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $userId = null, ?string $estado = null): array
+    private const SQLSTATE_UNIQUE_VIOLATION = '23505';
+
+    public function paginate(PaginationDTO $pagination, ?string $userId, ?string $estado): array
     {
         $q = Dispositivo::query();
 
-        if ($userId !== null) {
+        if ($userId) {
             $q->where('user_id', $userId);
         }
-
-        if ($estado !== null) {
+        if ($estado) {
             $q->where('estado', $estado);
         }
 
-        if ($pagination->query !== '') {
-            $q->where('identificador_dispositivo', 'ilike', "%{$pagination->query}%");
-        }
-
-        $paginated = $q->orderBy($pagination->sortKey ?: 'fecha_registro', $pagination->sortOrder)
+        $paginated = $q->orderBy($pagination->sortKey !== '' ? $pagination->sortKey : 'fecha_registro', $pagination->sortOrder)
             ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
-        return [
-            'data' => collect($paginated->items())->map(fn ($m) => DispositivoDTO::fromModel($m))->all(),
-            'total' => $paginated->total(),
-        ];
+        return ['data' => $paginated->items(), 'total' => $paginated->total()];
     }
 
-    public function findById(string $id): ?Dispositivo
+    public function findById(string $id): mixed
     {
-        return Dispositivo::find($id);
-    }
+        $dispositivo = Dispositivo::find($id);
 
-    public function findByIdentificador(string $identificador): ?Dispositivo
-    {
-        return Dispositivo::where('identificador_dispositivo', $identificador)->first();
-    }
-
-    public function create(array $data): Dispositivo
-    {
-        return Dispositivo::create($data);
-    }
-
-    public function update(string $id, array $data): Dispositivo
-    {
-        $model = Dispositivo::find($id);
-        if ($model === null) {
+        if (! $dispositivo) {
             throw new DispositivoNotFoundException($id);
         }
 
-        $model->update($data);
-
-        return $model->refresh();
+        return $dispositivo;
     }
 
-    public function aprobar(string $id): Dispositivo
+    public function create(array $data): mixed
     {
-        $model = Dispositivo::find($id);
-        if ($model === null) {
-            throw new DispositivoNotFoundException($id);
+        try {
+            return Dispositivo::create($data);
+        } catch (QueryException $e) {
+            if ($e->getCode() === self::SQLSTATE_UNIQUE_VIOLATION) {
+                throw new DispositivoYaRegistradoException($data['identificador_dispositivo']);
+            }
+
+            throw $e;
         }
-
-        $model->update(['estado' => 'ACTIVO']);
-
-        return $model->refresh();
     }
 
-    public function revocar(string $id, string $revokedBy): Dispositivo
+    public function update(string $id, array $data): mixed
     {
-        $model = Dispositivo::find($id);
-        if ($model === null) {
-            throw new DispositivoNotFoundException($id);
-        }
+        $dispositivo = $this->findById($id);
+        $dispositivo->update($data);
 
-        $model->update([
-            'estado' => 'REVOCADO',
+        return $dispositivo->fresh();
+    }
+
+    public function aprobar(string $id): mixed
+    {
+        $dispositivo = $this->findById($id);
+        $dispositivo->update(['estado' => 'ACTIVO']);
+
+        return $dispositivo->fresh();
+    }
+
+    public function revocar(string $id, string $revokedBy): mixed
+    {
+        $dispositivo = $this->findById($id);
+        $dispositivo->update([
+            'estado'           => 'REVOCADO',
             'fecha_revocacion' => now(),
-            'revoked_by' => $revokedBy,
+            'revoked_by'       => $revokedBy,
         ]);
 
-        return $model->refresh();
-    }
-
-    public function delete(string|array $ids): bool
-    {
-        return (bool) Dispositivo::destroy($ids);
+        return $dispositivo->fresh();
     }
 }
 ```
 
+---
+
 ## Http
 
-#### app/Http/Controllers/Api/Patrocinados/DispositivoController.php
+### Controllers
+
+#### `app/Http/Controllers/Api/Patrocinados/DispositivoController.php`
 
 ```php
 <?php
@@ -655,22 +584,18 @@ class DispositivoController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $pagination = PaginationDTO::fromArray($request->all(), 'fecha_registro');
+        $pagination = PaginationDTO::fromArray($request->all());
 
-        return response()->json(
-            $this->getDispositivosHandler->handle(new GetDispositivosQuery(
-                $pagination,
-                $request->string('user_id')->toString() ?: null,
-                $request->string('estado')->toString() ?: null,
-            ))
-        );
+        return response()->json($this->getDispositivosHandler->handle(new GetDispositivosQuery(
+            pagination: $pagination,
+            user_id: $request->get('user_id'),
+            estado: $request->get('estado'),
+        )));
     }
 
     public function show(string $id): JsonResponse
     {
-        return response()->json(
-            $this->getDispositivoByIdHandler->handle(new GetDispositivoByIdQuery($id))
-        );
+        return response()->json($this->getDispositivoByIdHandler->handle(new GetDispositivoByIdQuery($id)));
     }
 
     public function store(RegistrarDispositivoRequest $request): JsonResponse
@@ -694,7 +619,6 @@ class DispositivoController extends Controller
             nombre_dispositivo: $request->nombre_dispositivo,
             version_sistema: $request->version_sistema,
             version_aplicacion: $request->version_aplicacion,
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto);
@@ -702,27 +626,22 @@ class DispositivoController extends Controller
 
     public function aprobar(AprobarDispositivoRequest $request, string $id): JsonResponse
     {
-        $dto = $this->aprobarHandler->handle(new AprobarDispositivoCommand(
-            id: $id,
-            aprobadoPor: auth()->id(),
-        ));
-
-        return response()->json($dto);
+        return response()->json($this->aprobarHandler->handle(new AprobarDispositivoCommand($id)));
     }
 
     public function revocar(RevocarDispositivoRequest $request, string $id): JsonResponse
     {
-        $dto = $this->revocarHandler->handle(new RevocarDispositivoCommand(
+        return response()->json($this->revocarHandler->handle(new RevocarDispositivoCommand(
             id: $id,
-            revokedBy: auth()->id(),
-        ));
-
-        return response()->json($dto);
+            revoked_by: auth()->id(),
+        )));
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Dispositivos/RegistrarDispositivoRequest.php
+### Requests
+
+#### `app/Http/Requests/Patrocinados/Dispositivos/RegistrarDispositivoRequest.php`
 
 ```php
 <?php
@@ -741,20 +660,17 @@ class RegistrarDispositivoRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'identificador_dispositivo' => [
-                'required', 'string', 'max:180',
-                'unique:pgsql_patrocinados.dispositivos,identificador_dispositivo',
-            ],
-            'nombre_dispositivo' => ['nullable', 'string', 'max:150'],
-            'plataforma' => ['required', 'string', 'max:30'],
-            'version_sistema' => ['nullable', 'string', 'max:50'],
-            'version_aplicacion' => ['nullable', 'string', 'max:50'],
+            'identificador_dispositivo' => ['required', 'string', 'max:180'],
+            'nombre_dispositivo'        => ['nullable', 'string', 'max:150'],
+            'plataforma'                => ['required', 'string', 'max:30'],
+            'version_sistema'           => ['nullable', 'string', 'max:50'],
+            'version_aplicacion'        => ['nullable', 'string', 'max:50'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Dispositivos/UpdateDispositivoRequest.php
+#### `app/Http/Requests/Patrocinados/Dispositivos/UpdateDispositivoRequest.php`
 
 ```php
 <?php
@@ -774,14 +690,14 @@ class UpdateDispositivoRequest extends FormRequest
     {
         return [
             'nombre_dispositivo' => ['nullable', 'string', 'max:150'],
-            'version_sistema' => ['nullable', 'string', 'max:50'],
+            'version_sistema'    => ['nullable', 'string', 'max:50'],
             'version_aplicacion' => ['nullable', 'string', 'max:50'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Dispositivos/AprobarDispositivoRequest.php
+#### `app/Http/Requests/Patrocinados/Dispositivos/AprobarDispositivoRequest.php`
 
 ```php
 <?php
@@ -790,6 +706,7 @@ namespace App\Http\Requests\Patrocinados\Dispositivos;
 
 use Illuminate\Foundation\Http\FormRequest;
 
+/** Sin body requerido — la aprobación no lleva datos adicionales por ahora. */
 class AprobarDispositivoRequest extends FormRequest
 {
     public function authorize(): bool
@@ -804,7 +721,7 @@ class AprobarDispositivoRequest extends FormRequest
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Dispositivos/RevocarDispositivoRequest.php
+#### `app/Http/Requests/Patrocinados/Dispositivos/RevocarDispositivoRequest.php`
 
 ```php
 <?php
@@ -822,20 +739,22 @@ class RevocarDispositivoRequest extends FormRequest
 
     public function rules(): array
     {
-        return [];
+        return [
+            'motivo' => ['nullable', 'string', 'max:255'],
+        ];
     }
 }
 ```
 
-## Rutas (extracto de `routes/api/patrocinados.php`)
+---
+
+## Rutas de referencia (para `routes/api/patrocinados.php`, se cablean formalmente en la Etapa 1/9)
 
 ```php
-Route::prefix('dispositivos')->group(function () {
-    Route::post('/', [DispositivoController::class, 'store']);
-    Route::get('/', [DispositivoController::class, 'index'])->middleware('permiso-patrocinados:dispositivos.ver');
-    Route::get('/{id}', [DispositivoController::class, 'show'])->middleware('permiso-patrocinados:dispositivos.ver');
-    Route::put('/{id}', [DispositivoController::class, 'update'])->middleware('permiso-patrocinados:dispositivos.editar');
-    Route::post('/{id}/aprobar', [DispositivoController::class, 'aprobar'])->middleware('permiso-patrocinados:dispositivos.aprobar');
-    Route::post('/{id}/revocar', [DispositivoController::class, 'revocar'])->middleware('permiso-patrocinados:dispositivos.revocar');
-});
+Route::get('/dispositivos', [DispositivoController::class, 'index'])->middleware('permiso-patrocinados:dispositivos.ver');
+Route::get('/dispositivos/{id}', [DispositivoController::class, 'show'])->middleware('permiso-patrocinados:dispositivos.ver');
+Route::post('/dispositivos', [DispositivoController::class, 'store']); // el propio usuario autenticado, sin permiso adicional
+Route::put('/dispositivos/{id}', [DispositivoController::class, 'update'])->middleware('permiso-patrocinados:dispositivos.editar');
+Route::post('/dispositivos/{id}/aprobar', [DispositivoController::class, 'aprobar'])->middleware('permiso-patrocinados:dispositivos.aprobar');
+Route::post('/dispositivos/{id}/revocar', [DispositivoController::class, 'revocar'])->middleware('permiso-patrocinados:dispositivos.revocar');
 ```

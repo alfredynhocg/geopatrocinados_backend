@@ -1,12 +1,14 @@
 # Código completo — Etapa 3: Geografía
 
-> Fuente de columnas: migraciones reales en `database/migrations/patrocinados/2026_09_01_000010..000013_*`.
-> Patrón de referencia: sección "Patrón completo: ejemplo con Noticias" de `CLAUDE.md`.
-> Conexión: todo modelo usa el trait `UsaConexionPatrocinados` (ver `docs/patrocinados/codigo/01-infraestructura-base-codigo.md`).
+> Complementa [../03-geografia.md](../03-geografia.md). Código PHP completo, listo para copiar, de cada archivo de la "Estructura DDD" de esa etapa. Fuente de columnas: las migraciones reales `database/migrations/patrocinados/2026_09_01_00001{0,1,2,3}_*.php`.
+>
+> **Mecanismo PostGIS elegido — Opción A (sin librería adicional)**: `ubicaciones` guarda `latitude`/`longitude` como columnas `decimal` normales (fuente de verdad para lectura y para los DTOs) **y además** `punto_geografico geography(Point,4326)` (para queries espaciales tipo `ST_DWithin`, fuera de alcance de esta etapa). `EloquentUbicacionRepository` es el único punto de escritura: en `create()`/`update()` siempre recalcula `punto_geografico` con `ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography` — **orden `lng, lat`, no `lat, lng`**, es el error clásico de PostGIS. Nunca se acepta el punto crudo desde el request.
+
+---
 
 ## Domain/Geografia
 
-#### app/Domain/Geografia/Contracts/DepartamentoRepositoryInterface.php
+#### `app/Domain/Geografia/Contracts/DepartamentoRepositoryInterface.php`
 
 ```php
 <?php
@@ -29,7 +31,7 @@ interface DepartamentoRepositoryInterface
 }
 ```
 
-#### app/Domain/Geografia/Contracts/MunicipioRepositoryInterface.php
+#### `app/Domain/Geografia/Contracts/MunicipioRepositoryInterface.php`
 
 ```php
 <?php
@@ -40,7 +42,7 @@ use App\Shared\Kernel\DTOs\PaginationDTO;
 
 interface MunicipioRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $departamentoId = null): array;
+    public function paginate(PaginationDTO $pagination, ?string $departamentoId): array;
 
     public function findById(string $id): mixed;
 
@@ -52,7 +54,7 @@ interface MunicipioRepositoryInterface
 }
 ```
 
-#### app/Domain/Geografia/Contracts/ComunidadRepositoryInterface.php
+#### `app/Domain/Geografia/Contracts/ComunidadRepositoryInterface.php`
 
 ```php
 <?php
@@ -63,7 +65,7 @@ use App\Shared\Kernel\DTOs\PaginationDTO;
 
 interface ComunidadRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $municipioId = null): array;
+    public function paginate(PaginationDTO $pagination, ?string $municipioId): array;
 
     public function findById(string $id): mixed;
 
@@ -75,7 +77,7 @@ interface ComunidadRepositoryInterface
 }
 ```
 
-#### app/Domain/Geografia/Contracts/UbicacionRepositoryInterface.php
+#### `app/Domain/Geografia/Contracts/UbicacionRepositoryInterface.php`
 
 ```php
 <?php
@@ -86,23 +88,21 @@ use App\Shared\Kernel\DTOs\PaginationDTO;
 
 interface UbicacionRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $comunidadId = null): array;
+    public function paginate(PaginationDTO $pagination, ?string $comunidadId): array;
 
     public function findById(string $id): mixed;
 
-    /**
-     * `data` debe incluir `latitude`/`longitude`; el Repository recalcula
-     * `punto_geografico` en el mismo insert — nunca se acepta el punto crudo.
-     */
+    /** Recalcula punto_geografico a partir de latitude/longitude — ver nota de módulo. */
     public function create(array $data): mixed;
 
+    /** Recalcula punto_geografico a partir de latitude/longitude — ver nota de módulo. */
     public function update(string $id, array $data): mixed;
 
     public function delete(string|array $ids): bool;
 }
 ```
 
-#### app/Domain/Geografia/Exceptions/DepartamentoNotFoundException.php
+#### `app/Domain/Geografia/Exceptions/DepartamentoNotFoundException.php`
 
 ```php
 <?php
@@ -118,7 +118,7 @@ class DepartamentoNotFoundException extends \RuntimeException
 }
 ```
 
-#### app/Domain/Geografia/Exceptions/MunicipioNotFoundException.php
+#### `app/Domain/Geografia/Exceptions/MunicipioNotFoundException.php`
 
 ```php
 <?php
@@ -134,7 +134,7 @@ class MunicipioNotFoundException extends \RuntimeException
 }
 ```
 
-#### app/Domain/Geografia/Exceptions/ComunidadNotFoundException.php
+#### `app/Domain/Geografia/Exceptions/ComunidadNotFoundException.php`
 
 ```php
 <?php
@@ -150,7 +150,7 @@ class ComunidadNotFoundException extends \RuntimeException
 }
 ```
 
-#### app/Domain/Geografia/Exceptions/UbicacionNotFoundException.php
+#### `app/Domain/Geografia/Exceptions/UbicacionNotFoundException.php`
 
 ```php
 <?php
@@ -166,11 +166,13 @@ class UbicacionNotFoundException extends \RuntimeException
 }
 ```
 
+---
+
 ## Application/Geografia
 
 ### DTOs
 
-#### app/Application/Geografia/DTOs/DepartamentoDTO.php
+#### `app/Application/Geografia/DTOs/DepartamentoDTO.php`
 
 ```php
 <?php
@@ -184,9 +186,6 @@ final readonly class DepartamentoDTO
         public ?string $codigo,
         public string $departamento,
         public bool $estado,
-        public ?string $updated_by,
-        public ?string $created_at,
-        public ?string $updated_at,
     ) {}
 
     public static function fromModel(object $model): self
@@ -196,15 +195,12 @@ final readonly class DepartamentoDTO
             codigo: $model->codigo,
             departamento: $model->departamento,
             estado: (bool) $model->estado,
-            updated_by: $model->updated_by,
-            created_at: $model->created_at?->toIso8601String(),
-            updated_at: $model->updated_at?->toIso8601String(),
         );
     }
 }
 ```
 
-#### app/Application/Geografia/DTOs/MunicipioDTO.php
+#### `app/Application/Geografia/DTOs/MunicipioDTO.php`
 
 ```php
 <?php
@@ -219,9 +215,6 @@ final readonly class MunicipioDTO
         public ?string $codigo,
         public string $municipio,
         public bool $estado,
-        public ?string $updated_by,
-        public ?string $created_at,
-        public ?string $updated_at,
     ) {}
 
     public static function fromModel(object $model): self
@@ -232,15 +225,12 @@ final readonly class MunicipioDTO
             codigo: $model->codigo,
             municipio: $model->municipio,
             estado: (bool) $model->estado,
-            updated_by: $model->updated_by,
-            created_at: $model->created_at?->toIso8601String(),
-            updated_at: $model->updated_at?->toIso8601String(),
         );
     }
 }
 ```
 
-#### app/Application/Geografia/DTOs/ComunidadDTO.php
+#### `app/Application/Geografia/DTOs/ComunidadDTO.php`
 
 ```php
 <?php
@@ -255,9 +245,6 @@ final readonly class ComunidadDTO
         public ?string $codigo,
         public string $comunidad,
         public bool $estado,
-        public ?string $updated_by,
-        public ?string $created_at,
-        public ?string $updated_at,
     ) {}
 
     public static function fromModel(object $model): self
@@ -268,21 +255,19 @@ final readonly class ComunidadDTO
             codigo: $model->codigo,
             comunidad: $model->comunidad,
             estado: (bool) $model->estado,
-            updated_by: $model->updated_by,
-            created_at: $model->created_at?->toIso8601String(),
-            updated_at: $model->updated_at?->toIso8601String(),
         );
     }
 }
 ```
 
-#### app/Application/Geografia/DTOs/UbicacionDTO.php
+#### `app/Application/Geografia/DTOs/UbicacionDTO.php`
 
 ```php
 <?php
 
 namespace App\Application\Geografia\DTOs;
 
+/** latitude/longitude como floats planos — nunca expone el WKB/hex crudo de punto_geografico. */
 final readonly class UbicacionDTO
 {
     public function __construct(
@@ -295,16 +280,8 @@ final readonly class UbicacionDTO
         public ?float $longitude,
         public ?float $precision_metros,
         public bool $estado,
-        public ?string $updated_by,
-        public ?string $created_at,
-        public ?string $updated_at,
     ) {}
 
-    /**
-     * $model debe traer latitude/longitude como columnas planas ya resueltas
-     * por el Repository (ver EloquentUbicacionRepository) — este DTO nunca
-     * lee ni expone `punto_geografico` crudo.
-     */
     public static function fromModel(object $model): self
     {
         return new self(
@@ -317,9 +294,6 @@ final readonly class UbicacionDTO
             longitude: $model->longitude !== null ? (float) $model->longitude : null,
             precision_metros: $model->precision_metros !== null ? (float) $model->precision_metros : null,
             estado: (bool) $model->estado,
-            updated_by: $model->updated_by,
-            created_at: $model->created_at?->toIso8601String(),
-            updated_at: $model->updated_at?->toIso8601String(),
         );
     }
 }
@@ -327,7 +301,7 @@ final readonly class UbicacionDTO
 
 ### Commands
 
-#### app/Application/Geografia/Commands/CreateDepartamentoCommand.php
+#### `app/Application/Geografia/Commands/CreateDepartamentoCommand.php`
 
 ```php
 <?php
@@ -340,12 +314,11 @@ final readonly class CreateDepartamentoCommand
         public ?string $codigo,
         public string $departamento,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/UpdateDepartamentoCommand.php
+#### `app/Application/Geografia/Commands/UpdateDepartamentoCommand.php`
 
 ```php
 <?php
@@ -359,12 +332,11 @@ final readonly class UpdateDepartamentoCommand
         public ?string $codigo,
         public string $departamento,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/DeleteDepartamentoCommand.php
+#### `app/Application/Geografia/Commands/DeleteDepartamentoCommand.php`
 
 ```php
 <?php
@@ -377,7 +349,7 @@ final readonly class DeleteDepartamentoCommand
 }
 ```
 
-#### app/Application/Geografia/Commands/CreateMunicipioCommand.php
+#### `app/Application/Geografia/Commands/CreateMunicipioCommand.php`
 
 ```php
 <?php
@@ -391,12 +363,11 @@ final readonly class CreateMunicipioCommand
         public ?string $codigo,
         public string $municipio,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/UpdateMunicipioCommand.php
+#### `app/Application/Geografia/Commands/UpdateMunicipioCommand.php`
 
 ```php
 <?php
@@ -411,12 +382,11 @@ final readonly class UpdateMunicipioCommand
         public ?string $codigo,
         public string $municipio,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/DeleteMunicipioCommand.php
+#### `app/Application/Geografia/Commands/DeleteMunicipioCommand.php`
 
 ```php
 <?php
@@ -429,7 +399,7 @@ final readonly class DeleteMunicipioCommand
 }
 ```
 
-#### app/Application/Geografia/Commands/CreateComunidadCommand.php
+#### `app/Application/Geografia/Commands/CreateComunidadCommand.php`
 
 ```php
 <?php
@@ -443,12 +413,11 @@ final readonly class CreateComunidadCommand
         public ?string $codigo,
         public string $comunidad,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/UpdateComunidadCommand.php
+#### `app/Application/Geografia/Commands/UpdateComunidadCommand.php`
 
 ```php
 <?php
@@ -463,12 +432,11 @@ final readonly class UpdateComunidadCommand
         public ?string $codigo,
         public string $comunidad,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/DeleteComunidadCommand.php
+#### `app/Application/Geografia/Commands/DeleteComunidadCommand.php`
 
 ```php
 <?php
@@ -481,7 +449,7 @@ final readonly class DeleteComunidadCommand
 }
 ```
 
-#### app/Application/Geografia/Commands/CreateUbicacionCommand.php
+#### `app/Application/Geografia/Commands/CreateUbicacionCommand.php`
 
 ```php
 <?php
@@ -499,12 +467,11 @@ final readonly class CreateUbicacionCommand
         public float $longitude,
         public ?float $precision_metros,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/UpdateUbicacionCommand.php
+#### `app/Application/Geografia/Commands/UpdateUbicacionCommand.php`
 
 ```php
 <?php
@@ -523,12 +490,11 @@ final readonly class UpdateUbicacionCommand
         public float $longitude,
         public ?float $precision_metros,
         public bool $estado,
-        public ?string $updated_by,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Commands/DeleteUbicacionCommand.php
+#### `app/Application/Geografia/Commands/DeleteUbicacionCommand.php`
 
 ```php
 <?php
@@ -543,7 +509,7 @@ final readonly class DeleteUbicacionCommand
 
 ### Handlers
 
-#### app/Application/Geografia/Handlers/CreateDepartamentoHandler.php
+#### `app/Application/Geografia/Handlers/CreateDepartamentoHandler.php`
 
 ```php
 <?php
@@ -556,17 +522,14 @@ use App\Domain\Geografia\Contracts\DepartamentoRepositoryInterface;
 
 class CreateDepartamentoHandler
 {
-    public function __construct(
-        private readonly DepartamentoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DepartamentoRepositoryInterface $repository) {}
 
     public function handle(CreateDepartamentoCommand $command): DepartamentoDTO
     {
         $model = $this->repository->create([
-            'codigo' => $command->codigo,
+            'codigo'       => $command->codigo,
             'departamento' => $command->departamento,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'estado'       => $command->estado,
         ]);
 
         return DepartamentoDTO::fromModel($model);
@@ -574,7 +537,7 @@ class CreateDepartamentoHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/UpdateDepartamentoHandler.php
+#### `app/Application/Geografia/Handlers/UpdateDepartamentoHandler.php`
 
 ```php
 <?php
@@ -584,25 +547,17 @@ namespace App\Application\Geografia\Handlers;
 use App\Application\Geografia\Commands\UpdateDepartamentoCommand;
 use App\Application\Geografia\DTOs\DepartamentoDTO;
 use App\Domain\Geografia\Contracts\DepartamentoRepositoryInterface;
-use App\Domain\Geografia\Exceptions\DepartamentoNotFoundException;
 
 class UpdateDepartamentoHandler
 {
-    public function __construct(
-        private readonly DepartamentoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DepartamentoRepositoryInterface $repository) {}
 
     public function handle(UpdateDepartamentoCommand $command): DepartamentoDTO
     {
-        if ($this->repository->findById($command->id) === null) {
-            throw new DepartamentoNotFoundException($command->id);
-        }
-
         $model = $this->repository->update($command->id, [
-            'codigo' => $command->codigo,
+            'codigo'       => $command->codigo,
             'departamento' => $command->departamento,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'estado'       => $command->estado,
         ]);
 
         return DepartamentoDTO::fromModel($model);
@@ -610,7 +565,7 @@ class UpdateDepartamentoHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/DeleteDepartamentoHandler.php
+#### `app/Application/Geografia/Handlers/DeleteDepartamentoHandler.php`
 
 ```php
 <?php
@@ -622,9 +577,7 @@ use App\Domain\Geografia\Contracts\DepartamentoRepositoryInterface;
 
 class DeleteDepartamentoHandler
 {
-    public function __construct(
-        private readonly DepartamentoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DepartamentoRepositoryInterface $repository) {}
 
     public function handle(DeleteDepartamentoCommand $command): bool
     {
@@ -633,7 +586,7 @@ class DeleteDepartamentoHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/CreateMunicipioHandler.php
+#### `app/Application/Geografia/Handlers/CreateMunicipioHandler.php`
 
 ```php
 <?php
@@ -646,18 +599,15 @@ use App\Domain\Geografia\Contracts\MunicipioRepositoryInterface;
 
 class CreateMunicipioHandler
 {
-    public function __construct(
-        private readonly MunicipioRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly MunicipioRepositoryInterface $repository) {}
 
     public function handle(CreateMunicipioCommand $command): MunicipioDTO
     {
         $model = $this->repository->create([
             'departamento_id' => $command->departamento_id,
-            'codigo' => $command->codigo,
-            'municipio' => $command->municipio,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'codigo'          => $command->codigo,
+            'municipio'       => $command->municipio,
+            'estado'          => $command->estado,
         ]);
 
         return MunicipioDTO::fromModel($model);
@@ -665,7 +615,7 @@ class CreateMunicipioHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/UpdateMunicipioHandler.php
+#### `app/Application/Geografia/Handlers/UpdateMunicipioHandler.php`
 
 ```php
 <?php
@@ -675,26 +625,18 @@ namespace App\Application\Geografia\Handlers;
 use App\Application\Geografia\Commands\UpdateMunicipioCommand;
 use App\Application\Geografia\DTOs\MunicipioDTO;
 use App\Domain\Geografia\Contracts\MunicipioRepositoryInterface;
-use App\Domain\Geografia\Exceptions\MunicipioNotFoundException;
 
 class UpdateMunicipioHandler
 {
-    public function __construct(
-        private readonly MunicipioRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly MunicipioRepositoryInterface $repository) {}
 
     public function handle(UpdateMunicipioCommand $command): MunicipioDTO
     {
-        if ($this->repository->findById($command->id) === null) {
-            throw new MunicipioNotFoundException($command->id);
-        }
-
         $model = $this->repository->update($command->id, [
             'departamento_id' => $command->departamento_id,
-            'codigo' => $command->codigo,
-            'municipio' => $command->municipio,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'codigo'          => $command->codigo,
+            'municipio'       => $command->municipio,
+            'estado'          => $command->estado,
         ]);
 
         return MunicipioDTO::fromModel($model);
@@ -702,7 +644,7 @@ class UpdateMunicipioHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/DeleteMunicipioHandler.php
+#### `app/Application/Geografia/Handlers/DeleteMunicipioHandler.php`
 
 ```php
 <?php
@@ -714,9 +656,7 @@ use App\Domain\Geografia\Contracts\MunicipioRepositoryInterface;
 
 class DeleteMunicipioHandler
 {
-    public function __construct(
-        private readonly MunicipioRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly MunicipioRepositoryInterface $repository) {}
 
     public function handle(DeleteMunicipioCommand $command): bool
     {
@@ -725,7 +665,7 @@ class DeleteMunicipioHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/CreateComunidadHandler.php
+#### `app/Application/Geografia/Handlers/CreateComunidadHandler.php`
 
 ```php
 <?php
@@ -738,18 +678,15 @@ use App\Domain\Geografia\Contracts\ComunidadRepositoryInterface;
 
 class CreateComunidadHandler
 {
-    public function __construct(
-        private readonly ComunidadRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly ComunidadRepositoryInterface $repository) {}
 
     public function handle(CreateComunidadCommand $command): ComunidadDTO
     {
         $model = $this->repository->create([
             'municipio_id' => $command->municipio_id,
-            'codigo' => $command->codigo,
-            'comunidad' => $command->comunidad,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'codigo'       => $command->codigo,
+            'comunidad'    => $command->comunidad,
+            'estado'       => $command->estado,
         ]);
 
         return ComunidadDTO::fromModel($model);
@@ -757,7 +694,7 @@ class CreateComunidadHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/UpdateComunidadHandler.php
+#### `app/Application/Geografia/Handlers/UpdateComunidadHandler.php`
 
 ```php
 <?php
@@ -767,26 +704,18 @@ namespace App\Application\Geografia\Handlers;
 use App\Application\Geografia\Commands\UpdateComunidadCommand;
 use App\Application\Geografia\DTOs\ComunidadDTO;
 use App\Domain\Geografia\Contracts\ComunidadRepositoryInterface;
-use App\Domain\Geografia\Exceptions\ComunidadNotFoundException;
 
 class UpdateComunidadHandler
 {
-    public function __construct(
-        private readonly ComunidadRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly ComunidadRepositoryInterface $repository) {}
 
     public function handle(UpdateComunidadCommand $command): ComunidadDTO
     {
-        if ($this->repository->findById($command->id) === null) {
-            throw new ComunidadNotFoundException($command->id);
-        }
-
         $model = $this->repository->update($command->id, [
             'municipio_id' => $command->municipio_id,
-            'codigo' => $command->codigo,
-            'comunidad' => $command->comunidad,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'codigo'       => $command->codigo,
+            'comunidad'    => $command->comunidad,
+            'estado'       => $command->estado,
         ]);
 
         return ComunidadDTO::fromModel($model);
@@ -794,7 +723,7 @@ class UpdateComunidadHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/DeleteComunidadHandler.php
+#### `app/Application/Geografia/Handlers/DeleteComunidadHandler.php`
 
 ```php
 <?php
@@ -806,9 +735,7 @@ use App\Domain\Geografia\Contracts\ComunidadRepositoryInterface;
 
 class DeleteComunidadHandler
 {
-    public function __construct(
-        private readonly ComunidadRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly ComunidadRepositoryInterface $repository) {}
 
     public function handle(DeleteComunidadCommand $command): bool
     {
@@ -817,7 +744,7 @@ class DeleteComunidadHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/CreateUbicacionHandler.php
+#### `app/Application/Geografia/Handlers/CreateUbicacionHandler.php`
 
 ```php
 <?php
@@ -830,24 +757,19 @@ use App\Domain\Geografia\Contracts\UbicacionRepositoryInterface;
 
 class CreateUbicacionHandler
 {
-    public function __construct(
-        private readonly UbicacionRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly UbicacionRepositoryInterface $repository) {}
 
     public function handle(CreateUbicacionCommand $command): UbicacionDTO
     {
-        // El Repository recalcula punto_geografico a partir de latitude/longitude —
-        // este Handler nunca construye el punto PostGIS directamente.
         $model = $this->repository->create([
-            'comunidad_id' => $command->comunidad_id,
-            'nombre' => $command->nombre,
-            'tipo' => $command->tipo,
-            'direccion' => $command->direccion,
-            'latitude' => $command->latitude,
-            'longitude' => $command->longitude,
-            'precision_metros' => $command->precision_metros,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'comunidad_id'      => $command->comunidad_id,
+            'nombre'            => $command->nombre,
+            'tipo'              => $command->tipo,
+            'direccion'         => $command->direccion,
+            'latitude'          => $command->latitude,
+            'longitude'         => $command->longitude,
+            'precision_metros'  => $command->precision_metros,
+            'estado'            => $command->estado,
         ]);
 
         return UbicacionDTO::fromModel($model);
@@ -855,7 +777,7 @@ class CreateUbicacionHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/UpdateUbicacionHandler.php
+#### `app/Application/Geografia/Handlers/UpdateUbicacionHandler.php`
 
 ```php
 <?php
@@ -865,33 +787,22 @@ namespace App\Application\Geografia\Handlers;
 use App\Application\Geografia\Commands\UpdateUbicacionCommand;
 use App\Application\Geografia\DTOs\UbicacionDTO;
 use App\Domain\Geografia\Contracts\UbicacionRepositoryInterface;
-use App\Domain\Geografia\Exceptions\UbicacionNotFoundException;
 
 class UpdateUbicacionHandler
 {
-    public function __construct(
-        private readonly UbicacionRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly UbicacionRepositoryInterface $repository) {}
 
     public function handle(UpdateUbicacionCommand $command): UbicacionDTO
     {
-        if ($this->repository->findById($command->id) === null) {
-            throw new UbicacionNotFoundException($command->id);
-        }
-
-        // latitude/longitude siempre van juntos: no existe un update parcial
-        // de solo uno de los dos sin recomputar punto_geografico (regla de
-        // sincronía de la Etapa 3).
         $model = $this->repository->update($command->id, [
-            'comunidad_id' => $command->comunidad_id,
-            'nombre' => $command->nombre,
-            'tipo' => $command->tipo,
-            'direccion' => $command->direccion,
-            'latitude' => $command->latitude,
-            'longitude' => $command->longitude,
-            'precision_metros' => $command->precision_metros,
-            'estado' => $command->estado,
-            'updated_by' => $command->updated_by,
+            'comunidad_id'      => $command->comunidad_id,
+            'nombre'            => $command->nombre,
+            'tipo'              => $command->tipo,
+            'direccion'         => $command->direccion,
+            'latitude'          => $command->latitude,
+            'longitude'         => $command->longitude,
+            'precision_metros'  => $command->precision_metros,
+            'estado'            => $command->estado,
         ]);
 
         return UbicacionDTO::fromModel($model);
@@ -899,7 +810,7 @@ class UpdateUbicacionHandler
 }
 ```
 
-#### app/Application/Geografia/Handlers/DeleteUbicacionHandler.php
+#### `app/Application/Geografia/Handlers/DeleteUbicacionHandler.php`
 
 ```php
 <?php
@@ -911,9 +822,7 @@ use App\Domain\Geografia\Contracts\UbicacionRepositoryInterface;
 
 class DeleteUbicacionHandler
 {
-    public function __construct(
-        private readonly UbicacionRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly UbicacionRepositoryInterface $repository) {}
 
     public function handle(DeleteUbicacionCommand $command): bool
     {
@@ -924,7 +833,7 @@ class DeleteUbicacionHandler
 
 ### Queries
 
-#### app/Application/Geografia/Queries/GetDepartamentosQuery.php
+#### `app/Application/Geografia/Queries/GetDepartamentosQuery.php`
 
 ```php
 <?php
@@ -939,20 +848,7 @@ final readonly class GetDepartamentosQuery
 }
 ```
 
-#### app/Application/Geografia/Queries/GetDepartamentoByIdQuery.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\Queries;
-
-final readonly class GetDepartamentoByIdQuery
-{
-    public function __construct(public string $id) {}
-}
-```
-
-#### app/Application/Geografia/Queries/GetMunicipiosQuery.php
+#### `app/Application/Geografia/Queries/GetMunicipiosQuery.php`
 
 ```php
 <?php
@@ -965,25 +861,12 @@ final readonly class GetMunicipiosQuery
 {
     public function __construct(
         public PaginationDTO $pagination,
-        public ?string $departamentoId = null,
+        public ?string $departamento_id = null,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Queries/GetMunicipioByIdQuery.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\Queries;
-
-final readonly class GetMunicipioByIdQuery
-{
-    public function __construct(public string $id) {}
-}
-```
-
-#### app/Application/Geografia/Queries/GetComunidadesQuery.php
+#### `app/Application/Geografia/Queries/GetComunidadesQuery.php`
 
 ```php
 <?php
@@ -996,25 +879,12 @@ final readonly class GetComunidadesQuery
 {
     public function __construct(
         public PaginationDTO $pagination,
-        public ?string $municipioId = null,
+        public ?string $municipio_id = null,
     ) {}
 }
 ```
 
-#### app/Application/Geografia/Queries/GetComunidadByIdQuery.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\Queries;
-
-final readonly class GetComunidadByIdQuery
-{
-    public function __construct(public string $id) {}
-}
-```
-
-#### app/Application/Geografia/Queries/GetUbicacionesQuery.php
+#### `app/Application/Geografia/Queries/GetUbicacionesQuery.php`
 
 ```php
 <?php
@@ -1027,50 +897,14 @@ final readonly class GetUbicacionesQuery
 {
     public function __construct(
         public PaginationDTO $pagination,
-        public ?string $comunidadId = null,
+        public ?string $comunidad_id = null,
     ) {}
-}
-```
-
-#### app/Application/Geografia/Queries/GetUbicacionByIdQuery.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\Queries;
-
-final readonly class GetUbicacionByIdQuery
-{
-    public function __construct(public string $id) {}
 }
 ```
 
 ### QueryHandlers
 
-#### app/Application/Geografia/QueryHandlers/GetDepartamentosQueryHandler.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\QueryHandlers;
-
-use App\Application\Geografia\Queries\GetDepartamentosQuery;
-use App\Domain\Geografia\Contracts\DepartamentoRepositoryInterface;
-
-class GetDepartamentosQueryHandler
-{
-    public function __construct(
-        private readonly DepartamentoRepositoryInterface $repository
-    ) {}
-
-    public function handle(GetDepartamentosQuery $query): array
-    {
-        return $this->repository->paginate($query->pagination);
-    }
-}
-```
-
-#### app/Application/Geografia/QueryHandlers/GetDepartamentoByIdQueryHandler.php
+#### `app/Application/Geografia/QueryHandlers/GetDepartamentosQueryHandler.php`
 
 ```php
 <?php
@@ -1078,52 +912,26 @@ class GetDepartamentosQueryHandler
 namespace App\Application\Geografia\QueryHandlers;
 
 use App\Application\Geografia\DTOs\DepartamentoDTO;
-use App\Application\Geografia\Queries\GetDepartamentoByIdQuery;
+use App\Application\Geografia\Queries\GetDepartamentosQuery;
 use App\Domain\Geografia\Contracts\DepartamentoRepositoryInterface;
-use App\Domain\Geografia\Exceptions\DepartamentoNotFoundException;
 
-class GetDepartamentoByIdQueryHandler
+class GetDepartamentosQueryHandler
 {
-    public function __construct(
-        private readonly DepartamentoRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly DepartamentoRepositoryInterface $repository) {}
 
-    public function handle(GetDepartamentoByIdQuery $query): DepartamentoDTO
+    public function handle(GetDepartamentosQuery $query): array
     {
-        $model = $this->repository->findById($query->id);
-        if ($model === null) {
-            throw new DepartamentoNotFoundException($query->id);
-        }
+        $paginated = $this->repository->paginate($query->pagination);
 
-        return DepartamentoDTO::fromModel($model);
+        return [
+            'data'  => collect($paginated['data'])->map(fn (object $m) => DepartamentoDTO::fromModel($m))->all(),
+            'total' => $paginated['total'],
+        ];
     }
 }
 ```
 
-#### app/Application/Geografia/QueryHandlers/GetMunicipiosQueryHandler.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\QueryHandlers;
-
-use App\Application\Geografia\Queries\GetMunicipiosQuery;
-use App\Domain\Geografia\Contracts\MunicipioRepositoryInterface;
-
-class GetMunicipiosQueryHandler
-{
-    public function __construct(
-        private readonly MunicipioRepositoryInterface $repository
-    ) {}
-
-    public function handle(GetMunicipiosQuery $query): array
-    {
-        return $this->repository->paginate($query->pagination, $query->departamentoId);
-    }
-}
-```
-
-#### app/Application/Geografia/QueryHandlers/GetMunicipioByIdQueryHandler.php
+#### `app/Application/Geografia/QueryHandlers/GetMunicipiosQueryHandler.php`
 
 ```php
 <?php
@@ -1131,52 +939,26 @@ class GetMunicipiosQueryHandler
 namespace App\Application\Geografia\QueryHandlers;
 
 use App\Application\Geografia\DTOs\MunicipioDTO;
-use App\Application\Geografia\Queries\GetMunicipioByIdQuery;
+use App\Application\Geografia\Queries\GetMunicipiosQuery;
 use App\Domain\Geografia\Contracts\MunicipioRepositoryInterface;
-use App\Domain\Geografia\Exceptions\MunicipioNotFoundException;
 
-class GetMunicipioByIdQueryHandler
+class GetMunicipiosQueryHandler
 {
-    public function __construct(
-        private readonly MunicipioRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly MunicipioRepositoryInterface $repository) {}
 
-    public function handle(GetMunicipioByIdQuery $query): MunicipioDTO
+    public function handle(GetMunicipiosQuery $query): array
     {
-        $model = $this->repository->findById($query->id);
-        if ($model === null) {
-            throw new MunicipioNotFoundException($query->id);
-        }
+        $paginated = $this->repository->paginate($query->pagination, $query->departamento_id);
 
-        return MunicipioDTO::fromModel($model);
+        return [
+            'data'  => collect($paginated['data'])->map(fn (object $m) => MunicipioDTO::fromModel($m))->all(),
+            'total' => $paginated['total'],
+        ];
     }
 }
 ```
 
-#### app/Application/Geografia/QueryHandlers/GetComunidadesQueryHandler.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\QueryHandlers;
-
-use App\Application\Geografia\Queries\GetComunidadesQuery;
-use App\Domain\Geografia\Contracts\ComunidadRepositoryInterface;
-
-class GetComunidadesQueryHandler
-{
-    public function __construct(
-        private readonly ComunidadRepositoryInterface $repository
-    ) {}
-
-    public function handle(GetComunidadesQuery $query): array
-    {
-        return $this->repository->paginate($query->pagination, $query->municipioId);
-    }
-}
-```
-
-#### app/Application/Geografia/QueryHandlers/GetComunidadByIdQueryHandler.php
+#### `app/Application/Geografia/QueryHandlers/GetComunidadesQueryHandler.php`
 
 ```php
 <?php
@@ -1184,52 +966,26 @@ class GetComunidadesQueryHandler
 namespace App\Application\Geografia\QueryHandlers;
 
 use App\Application\Geografia\DTOs\ComunidadDTO;
-use App\Application\Geografia\Queries\GetComunidadByIdQuery;
+use App\Application\Geografia\Queries\GetComunidadesQuery;
 use App\Domain\Geografia\Contracts\ComunidadRepositoryInterface;
-use App\Domain\Geografia\Exceptions\ComunidadNotFoundException;
 
-class GetComunidadByIdQueryHandler
+class GetComunidadesQueryHandler
 {
-    public function __construct(
-        private readonly ComunidadRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly ComunidadRepositoryInterface $repository) {}
 
-    public function handle(GetComunidadByIdQuery $query): ComunidadDTO
+    public function handle(GetComunidadesQuery $query): array
     {
-        $model = $this->repository->findById($query->id);
-        if ($model === null) {
-            throw new ComunidadNotFoundException($query->id);
-        }
+        $paginated = $this->repository->paginate($query->pagination, $query->municipio_id);
 
-        return ComunidadDTO::fromModel($model);
+        return [
+            'data'  => collect($paginated['data'])->map(fn (object $m) => ComunidadDTO::fromModel($m))->all(),
+            'total' => $paginated['total'],
+        ];
     }
 }
 ```
 
-#### app/Application/Geografia/QueryHandlers/GetUbicacionesQueryHandler.php
-
-```php
-<?php
-
-namespace App\Application\Geografia\QueryHandlers;
-
-use App\Application\Geografia\Queries\GetUbicacionesQuery;
-use App\Domain\Geografia\Contracts\UbicacionRepositoryInterface;
-
-class GetUbicacionesQueryHandler
-{
-    public function __construct(
-        private readonly UbicacionRepositoryInterface $repository
-    ) {}
-
-    public function handle(GetUbicacionesQuery $query): array
-    {
-        return $this->repository->paginate($query->pagination, $query->comunidadId);
-    }
-}
-```
-
-#### app/Application/Geografia/QueryHandlers/GetUbicacionByIdQueryHandler.php
+#### `app/Application/Geografia/QueryHandlers/GetUbicacionesQueryHandler.php`
 
 ```php
 <?php
@@ -1237,33 +993,32 @@ class GetUbicacionesQueryHandler
 namespace App\Application\Geografia\QueryHandlers;
 
 use App\Application\Geografia\DTOs\UbicacionDTO;
-use App\Application\Geografia\Queries\GetUbicacionByIdQuery;
+use App\Application\Geografia\Queries\GetUbicacionesQuery;
 use App\Domain\Geografia\Contracts\UbicacionRepositoryInterface;
-use App\Domain\Geografia\Exceptions\UbicacionNotFoundException;
 
-class GetUbicacionByIdQueryHandler
+class GetUbicacionesQueryHandler
 {
-    public function __construct(
-        private readonly UbicacionRepositoryInterface $repository
-    ) {}
+    public function __construct(private readonly UbicacionRepositoryInterface $repository) {}
 
-    public function handle(GetUbicacionByIdQuery $query): UbicacionDTO
+    public function handle(GetUbicacionesQuery $query): array
     {
-        $model = $this->repository->findById($query->id);
-        if ($model === null) {
-            throw new UbicacionNotFoundException($query->id);
-        }
+        $paginated = $this->repository->paginate($query->pagination, $query->comunidad_id);
 
-        return UbicacionDTO::fromModel($model);
+        return [
+            'data'  => collect($paginated['data'])->map(fn (object $m) => UbicacionDTO::fromModel($m))->all(),
+            'total' => $paginated['total'],
+        ];
     }
 }
 ```
+
+---
 
 ## Infrastructure/Geografia
 
 ### Models
 
-#### app/Infrastructure/Geografia/Models/Departamento.php
+#### `app/Infrastructure/Geografia/Models/Departamento.php`
 
 ```php
 <?php
@@ -1280,25 +1035,18 @@ class Departamento extends Model
 
     protected $table = 'departamento';
 
-    protected $fillable = [
-        'codigo',
-        'departamento',
-        'estado',
-        'updated_by',
-    ];
+    protected $fillable = ['codigo', 'departamento', 'estado', 'updated_by'];
 
-    protected $casts = [
-        'estado' => 'boolean',
-    ];
+    protected $casts = ['estado' => 'boolean'];
 
-    public function municipios(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function municipios()
     {
         return $this->hasMany(Municipio::class, 'departamento_id');
     }
 }
 ```
 
-#### app/Infrastructure/Geografia/Models/Municipio.php
+#### `app/Infrastructure/Geografia/Models/Municipio.php`
 
 ```php
 <?php
@@ -1315,31 +1063,23 @@ class Municipio extends Model
 
     protected $table = 'municipios';
 
-    protected $fillable = [
-        'departamento_id',
-        'codigo',
-        'municipio',
-        'estado',
-        'updated_by',
-    ];
+    protected $fillable = ['departamento_id', 'codigo', 'municipio', 'estado', 'updated_by'];
 
-    protected $casts = [
-        'estado' => 'boolean',
-    ];
+    protected $casts = ['estado' => 'boolean'];
 
-    public function departamento(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    public function departamento()
     {
         return $this->belongsTo(Departamento::class, 'departamento_id');
     }
 
-    public function comunidades(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function comunidades()
     {
         return $this->hasMany(Comunidad::class, 'municipio_id');
     }
 }
 ```
 
-#### app/Infrastructure/Geografia/Models/Comunidad.php
+#### `app/Infrastructure/Geografia/Models/Comunidad.php`
 
 ```php
 <?php
@@ -1356,31 +1096,23 @@ class Comunidad extends Model
 
     protected $table = 'comunidades';
 
-    protected $fillable = [
-        'municipio_id',
-        'codigo',
-        'comunidad',
-        'estado',
-        'updated_by',
-    ];
+    protected $fillable = ['municipio_id', 'codigo', 'comunidad', 'estado', 'updated_by'];
 
-    protected $casts = [
-        'estado' => 'boolean',
-    ];
+    protected $casts = ['estado' => 'boolean'];
 
-    public function municipio(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    public function municipio()
     {
         return $this->belongsTo(Municipio::class, 'municipio_id');
     }
 
-    public function ubicaciones(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function ubicaciones()
     {
         return $this->hasMany(Ubicacion::class, 'comunidad_id');
     }
 }
 ```
 
-#### app/Infrastructure/Geografia/Models/Ubicacion.php
+#### `app/Infrastructure/Geografia/Models/Ubicacion.php`
 
 ```php
 <?php
@@ -1391,35 +1123,30 @@ use App\Infrastructure\Patrocinados\Concerns\UsaConexionPatrocinados;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 
+/**
+ * `punto_geografico` (geography) no se declara como columna fillable/casteada:
+ * la escribe únicamente EloquentUbicacionRepository vía SQL crudo, derivada
+ * siempre de latitude/longitude. El modelo no la expone.
+ */
 class Ubicacion extends Model
 {
     use HasUuids, UsaConexionPatrocinados;
 
     protected $table = 'ubicaciones';
 
-    // `punto_geografico` deliberadamente NO está en $fillable: solo el
-    // EloquentUbicacionRepository lo escribe, vía SQL crudo, a partir de
-    // latitude/longitude. Nunca se asigna por mass-assignment.
     protected $fillable = [
-        'comunidad_id',
-        'nombre',
-        'tipo',
-        'direccion',
-        'latitude',
-        'longitude',
-        'precision_metros',
-        'estado',
-        'updated_by',
+        'comunidad_id', 'nombre', 'tipo', 'direccion',
+        'latitude', 'longitude', 'precision_metros', 'estado', 'updated_by',
     ];
 
     protected $casts = [
-        'estado' => 'boolean',
-        'latitude' => 'decimal:7',
-        'longitude' => 'decimal:7',
+        'latitude'         => 'decimal:7',
+        'longitude'        => 'decimal:7',
         'precision_metros' => 'decimal:2',
+        'estado'           => 'boolean',
     ];
 
-    public function comunidad(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    public function comunidad()
     {
         return $this->belongsTo(Comunidad::class, 'comunidad_id');
     }
@@ -1428,7 +1155,7 @@ class Ubicacion extends Model
 
 ### Repositories
 
-#### app/Infrastructure/Geografia/Repositories/EloquentDepartamentoRepository.php
+#### `app/Infrastructure/Geografia/Repositories/EloquentDepartamentoRepository.php`
 
 ```php
 <?php
@@ -1439,57 +1166,52 @@ use App\Domain\Geografia\Contracts\DepartamentoRepositoryInterface;
 use App\Domain\Geografia\Exceptions\DepartamentoNotFoundException;
 use App\Infrastructure\Geografia\Models\Departamento;
 use App\Shared\Kernel\DTOs\PaginationDTO;
-use App\Application\Geografia\DTOs\DepartamentoDTO;
 
 class EloquentDepartamentoRepository implements DepartamentoRepositoryInterface
 {
     public function paginate(PaginationDTO $pagination): array
     {
-        $q = Departamento::query();
-
-        if ($pagination->query !== '') {
-            $q->where('departamento', 'ilike', "%{$pagination->query}%");
-        }
-
-        $paginated = $q->orderBy($pagination->sortKey ?: 'departamento', $pagination->sortOrder)
+        $paginated = Departamento::query()
+            ->orderBy($pagination->sortKey !== '' ? $pagination->sortKey : 'created_at', $pagination->sortOrder)
             ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
-        return [
-            'data' => collect($paginated->items())->map(fn ($m) => DepartamentoDTO::fromModel($m))->all(),
-            'total' => $paginated->total(),
-        ];
+        return ['data' => $paginated->items(), 'total' => $paginated->total()];
     }
 
-    public function findById(string $id): ?Departamento
+    public function findById(string $id): mixed
     {
-        return Departamento::find($id);
+        $departamento = Departamento::find($id);
+
+        if (! $departamento) {
+            throw new DepartamentoNotFoundException($id);
+        }
+
+        return $departamento;
     }
 
-    public function create(array $data): Departamento
+    public function create(array $data): mixed
     {
         return Departamento::create($data);
     }
 
-    public function update(string $id, array $data): Departamento
+    public function update(string $id, array $data): mixed
     {
-        $model = Departamento::find($id);
-        if ($model === null) {
-            throw new DepartamentoNotFoundException($id);
-        }
+        $departamento = $this->findById($id);
+        $departamento->update($data);
 
-        $model->update($data);
-
-        return $model->refresh();
+        return $departamento->fresh();
     }
 
     public function delete(string|array $ids): bool
     {
-        return (bool) Departamento::destroy($ids);
+        // FK sin cascade (onDelete('restrict')) — Postgres rechaza el delete
+        // si hay municipios asociados, lo que se propaga como QueryException.
+        return (bool) Departamento::whereIn('id', (array) $ids)->delete();
     }
 }
 ```
 
-#### app/Infrastructure/Geografia/Repositories/EloquentMunicipioRepository.php
+#### `app/Infrastructure/Geografia/Repositories/EloquentMunicipioRepository.php`
 
 ```php
 <?php
@@ -1500,61 +1222,55 @@ use App\Domain\Geografia\Contracts\MunicipioRepositoryInterface;
 use App\Domain\Geografia\Exceptions\MunicipioNotFoundException;
 use App\Infrastructure\Geografia\Models\Municipio;
 use App\Shared\Kernel\DTOs\PaginationDTO;
-use App\Application\Geografia\DTOs\MunicipioDTO;
 
 class EloquentMunicipioRepository implements MunicipioRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $departamentoId = null): array
+    public function paginate(PaginationDTO $pagination, ?string $departamentoId): array
     {
         $q = Municipio::query();
 
-        if ($departamentoId !== null) {
+        if ($departamentoId) {
             $q->where('departamento_id', $departamentoId);
         }
 
-        if ($pagination->query !== '') {
-            $q->where('municipio', 'ilike', "%{$pagination->query}%");
-        }
-
-        $paginated = $q->orderBy($pagination->sortKey ?: 'municipio', $pagination->sortOrder)
+        $paginated = $q->orderBy($pagination->sortKey !== '' ? $pagination->sortKey : 'created_at', $pagination->sortOrder)
             ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
-        return [
-            'data' => collect($paginated->items())->map(fn ($m) => MunicipioDTO::fromModel($m))->all(),
-            'total' => $paginated->total(),
-        ];
+        return ['data' => $paginated->items(), 'total' => $paginated->total()];
     }
 
-    public function findById(string $id): ?Municipio
+    public function findById(string $id): mixed
     {
-        return Municipio::find($id);
+        $municipio = Municipio::find($id);
+
+        if (! $municipio) {
+            throw new MunicipioNotFoundException($id);
+        }
+
+        return $municipio;
     }
 
-    public function create(array $data): Municipio
+    public function create(array $data): mixed
     {
         return Municipio::create($data);
     }
 
-    public function update(string $id, array $data): Municipio
+    public function update(string $id, array $data): mixed
     {
-        $model = Municipio::find($id);
-        if ($model === null) {
-            throw new MunicipioNotFoundException($id);
-        }
+        $municipio = $this->findById($id);
+        $municipio->update($data);
 
-        $model->update($data);
-
-        return $model->refresh();
+        return $municipio->fresh();
     }
 
     public function delete(string|array $ids): bool
     {
-        return (bool) Municipio::destroy($ids);
+        return (bool) Municipio::whereIn('id', (array) $ids)->delete();
     }
 }
 ```
 
-#### app/Infrastructure/Geografia/Repositories/EloquentComunidadRepository.php
+#### `app/Infrastructure/Geografia/Repositories/EloquentComunidadRepository.php`
 
 ```php
 <?php
@@ -1565,61 +1281,55 @@ use App\Domain\Geografia\Contracts\ComunidadRepositoryInterface;
 use App\Domain\Geografia\Exceptions\ComunidadNotFoundException;
 use App\Infrastructure\Geografia\Models\Comunidad;
 use App\Shared\Kernel\DTOs\PaginationDTO;
-use App\Application\Geografia\DTOs\ComunidadDTO;
 
 class EloquentComunidadRepository implements ComunidadRepositoryInterface
 {
-    public function paginate(PaginationDTO $pagination, ?string $municipioId = null): array
+    public function paginate(PaginationDTO $pagination, ?string $municipioId): array
     {
         $q = Comunidad::query();
 
-        if ($municipioId !== null) {
+        if ($municipioId) {
             $q->where('municipio_id', $municipioId);
         }
 
-        if ($pagination->query !== '') {
-            $q->where('comunidad', 'ilike', "%{$pagination->query}%");
-        }
-
-        $paginated = $q->orderBy($pagination->sortKey ?: 'comunidad', $pagination->sortOrder)
+        $paginated = $q->orderBy($pagination->sortKey !== '' ? $pagination->sortKey : 'created_at', $pagination->sortOrder)
             ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
-        return [
-            'data' => collect($paginated->items())->map(fn ($m) => ComunidadDTO::fromModel($m))->all(),
-            'total' => $paginated->total(),
-        ];
+        return ['data' => $paginated->items(), 'total' => $paginated->total()];
     }
 
-    public function findById(string $id): ?Comunidad
+    public function findById(string $id): mixed
     {
-        return Comunidad::find($id);
+        $comunidad = Comunidad::find($id);
+
+        if (! $comunidad) {
+            throw new ComunidadNotFoundException($id);
+        }
+
+        return $comunidad;
     }
 
-    public function create(array $data): Comunidad
+    public function create(array $data): mixed
     {
         return Comunidad::create($data);
     }
 
-    public function update(string $id, array $data): Comunidad
+    public function update(string $id, array $data): mixed
     {
-        $model = Comunidad::find($id);
-        if ($model === null) {
-            throw new ComunidadNotFoundException($id);
-        }
+        $comunidad = $this->findById($id);
+        $comunidad->update($data);
 
-        $model->update($data);
-
-        return $model->refresh();
+        return $comunidad->fresh();
     }
 
     public function delete(string|array $ids): bool
     {
-        return (bool) Comunidad::destroy($ids);
+        return (bool) Comunidad::whereIn('id', (array) $ids)->delete();
     }
 }
 ```
 
-#### app/Infrastructure/Geografia/Repositories/EloquentUbicacionRepository.php
+#### `app/Infrastructure/Geografia/Repositories/EloquentUbicacionRepository.php`
 
 ```php
 <?php
@@ -1630,88 +1340,80 @@ use App\Domain\Geografia\Contracts\UbicacionRepositoryInterface;
 use App\Domain\Geografia\Exceptions\UbicacionNotFoundException;
 use App\Infrastructure\Geografia\Models\Ubicacion;
 use App\Shared\Kernel\DTOs\PaginationDTO;
-use App\Application\Geografia\DTOs\UbicacionDTO;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Única fuente de verdad de la derivación lat/lng -> punto_geografico
+ * (plan de revisión §5.6). ST_MakePoint espera (longitude, latitude).
+ */
 class EloquentUbicacionRepository implements UbicacionRepositoryInterface
 {
-    private const CONNECTION = 'pgsql_patrocinados';
-
-    public function paginate(PaginationDTO $pagination, ?string $comunidadId = null): array
+    public function paginate(PaginationDTO $pagination, ?string $comunidadId): array
     {
         $q = Ubicacion::query();
 
-        if ($comunidadId !== null) {
+        if ($comunidadId) {
             $q->where('comunidad_id', $comunidadId);
         }
 
-        if ($pagination->query !== '') {
-            $q->where('nombre', 'ilike', "%{$pagination->query}%");
-        }
-
-        // latitude/longitude ya son columnas planas propias de la tabla —
-        // no hace falta ST_X/ST_Y aquí, solo al leer directamente punto_geografico.
-        $paginated = $q->orderBy($pagination->sortKey ?: 'nombre', $pagination->sortOrder)
+        $paginated = $q->orderBy($pagination->sortKey !== '' ? $pagination->sortKey : 'created_at', $pagination->sortOrder)
             ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
-        return [
-            'data' => collect($paginated->items())->map(fn ($m) => UbicacionDTO::fromModel($m))->all(),
-            'total' => $paginated->total(),
-        ];
+        return ['data' => $paginated->items(), 'total' => $paginated->total()];
     }
 
-    public function findById(string $id): ?Ubicacion
+    public function findById(string $id): mixed
     {
-        return Ubicacion::find($id);
-    }
+        $ubicacion = Ubicacion::find($id);
 
-    public function create(array $data): Ubicacion
-    {
-        $model = Ubicacion::create($data);
-        $this->recalcularPuntoGeografico($model->id, $data['longitude'], $data['latitude']);
-
-        return $model->refresh();
-    }
-
-    public function update(string $id, array $data): Ubicacion
-    {
-        $model = Ubicacion::find($id);
-        if ($model === null) {
+        if (! $ubicacion) {
             throw new UbicacionNotFoundException($id);
         }
 
-        $model->update($data);
-        $this->recalcularPuntoGeografico($id, $data['longitude'], $data['latitude']);
+        return $ubicacion;
+    }
 
-        return $model->refresh();
+    public function create(array $data): mixed
+    {
+        $ubicacion = Ubicacion::create($data);
+
+        $this->recalcularPunto($ubicacion->id, $data['longitude'], $data['latitude']);
+
+        return $ubicacion->fresh();
+    }
+
+    public function update(string $id, array $data): mixed
+    {
+        $ubicacion = $this->findById($id);
+        $ubicacion->update($data);
+
+        $this->recalcularPunto($ubicacion->id, $data['longitude'], $data['latitude']);
+
+        return $ubicacion->fresh();
     }
 
     public function delete(string|array $ids): bool
     {
-        return (bool) Ubicacion::destroy($ids);
+        return (bool) Ubicacion::whereIn('id', (array) $ids)->delete();
     }
 
-    /**
-     * Única fuente de verdad de la derivación lat/lng -> GEOGRAPHY (Opción A,
-     * sin librería adicional): reconstruye punto_geografico en cada
-     * create/update a partir de latitude/longitude recién guardados.
-     * Orden de ST_MakePoint: (longitude, latitude) — no al revés.
-     */
-    private function recalcularPuntoGeografico(string $id, float $longitude, float $latitude): void
+    private function recalcularPunto(string $id, float $longitude, float $latitude): void
     {
-        DB::connection(self::CONNECTION)->statement(
+        DB::connection('pgsql_patrocinados')->statement(
             'UPDATE ubicaciones SET punto_geografico = ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography WHERE id = ?',
-            [$longitude, $latitude, $id]
+            [$longitude, $latitude, $id],
         );
     }
 }
 ```
 
+---
+
 ## Http
 
 ### Controllers
 
-#### app/Http/Controllers/Api/Patrocinados/DepartamentoController.php
+#### `app/Http/Controllers/Api/Patrocinados/DepartamentoController.php`
 
 ```php
 <?php
@@ -1724,9 +1426,7 @@ use App\Application\Geografia\Commands\UpdateDepartamentoCommand;
 use App\Application\Geografia\Handlers\CreateDepartamentoHandler;
 use App\Application\Geografia\Handlers\DeleteDepartamentoHandler;
 use App\Application\Geografia\Handlers\UpdateDepartamentoHandler;
-use App\Application\Geografia\Queries\GetDepartamentoByIdQuery;
 use App\Application\Geografia\Queries\GetDepartamentosQuery;
-use App\Application\Geografia\QueryHandlers\GetDepartamentoByIdQueryHandler;
 use App\Application\Geografia\QueryHandlers\GetDepartamentosQueryHandler;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Patrocinados\Geografia\StoreDepartamentoRequest;
@@ -1739,7 +1439,6 @@ class DepartamentoController extends Controller
 {
     public function __construct(
         private readonly GetDepartamentosQueryHandler $getDepartamentosHandler,
-        private readonly GetDepartamentoByIdQueryHandler $getDepartamentoByIdHandler,
         private readonly CreateDepartamentoHandler $createHandler,
         private readonly UpdateDepartamentoHandler $updateHandler,
         private readonly DeleteDepartamentoHandler $deleteHandler,
@@ -1747,18 +1446,9 @@ class DepartamentoController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $pagination = PaginationDTO::fromArray($request->all(), 'departamento');
+        $pagination = PaginationDTO::fromArray($request->all());
 
-        return response()->json(
-            $this->getDepartamentosHandler->handle(new GetDepartamentosQuery($pagination))
-        );
-    }
-
-    public function show(string $id): JsonResponse
-    {
-        return response()->json(
-            $this->getDepartamentoByIdHandler->handle(new GetDepartamentoByIdQuery($id))
-        );
+        return response()->json($this->getDepartamentosHandler->handle(new GetDepartamentosQuery($pagination)));
     }
 
     public function store(StoreDepartamentoRequest $request): JsonResponse
@@ -1767,7 +1457,6 @@ class DepartamentoController extends Controller
             codigo: $request->codigo,
             departamento: $request->departamento,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto, 201);
@@ -1780,7 +1469,6 @@ class DepartamentoController extends Controller
             codigo: $request->codigo,
             departamento: $request->departamento,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto);
@@ -1795,7 +1483,7 @@ class DepartamentoController extends Controller
 }
 ```
 
-#### app/Http/Controllers/Api/Patrocinados/MunicipioController.php
+#### `app/Http/Controllers/Api/Patrocinados/MunicipioController.php`
 
 ```php
 <?php
@@ -1808,9 +1496,7 @@ use App\Application\Geografia\Commands\UpdateMunicipioCommand;
 use App\Application\Geografia\Handlers\CreateMunicipioHandler;
 use App\Application\Geografia\Handlers\DeleteMunicipioHandler;
 use App\Application\Geografia\Handlers\UpdateMunicipioHandler;
-use App\Application\Geografia\Queries\GetMunicipioByIdQuery;
 use App\Application\Geografia\Queries\GetMunicipiosQuery;
-use App\Application\Geografia\QueryHandlers\GetMunicipioByIdQueryHandler;
 use App\Application\Geografia\QueryHandlers\GetMunicipiosQueryHandler;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Patrocinados\Geografia\StoreMunicipioRequest;
@@ -1823,7 +1509,6 @@ class MunicipioController extends Controller
 {
     public function __construct(
         private readonly GetMunicipiosQueryHandler $getMunicipiosHandler,
-        private readonly GetMunicipioByIdQueryHandler $getMunicipioByIdHandler,
         private readonly CreateMunicipioHandler $createHandler,
         private readonly UpdateMunicipioHandler $updateHandler,
         private readonly DeleteMunicipioHandler $deleteHandler,
@@ -1831,21 +1516,12 @@ class MunicipioController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $pagination = PaginationDTO::fromArray($request->all(), 'municipio');
+        $pagination = PaginationDTO::fromArray($request->all());
 
-        return response()->json(
-            $this->getMunicipiosHandler->handle(new GetMunicipiosQuery(
-                $pagination,
-                $request->string('departamento_id')->toString() ?: null,
-            ))
-        );
-    }
-
-    public function show(string $id): JsonResponse
-    {
-        return response()->json(
-            $this->getMunicipioByIdHandler->handle(new GetMunicipioByIdQuery($id))
-        );
+        return response()->json($this->getMunicipiosHandler->handle(new GetMunicipiosQuery(
+            pagination: $pagination,
+            departamento_id: $request->get('departamento_id'),
+        )));
     }
 
     public function store(StoreMunicipioRequest $request): JsonResponse
@@ -1855,7 +1531,6 @@ class MunicipioController extends Controller
             codigo: $request->codigo,
             municipio: $request->municipio,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto, 201);
@@ -1869,7 +1544,6 @@ class MunicipioController extends Controller
             codigo: $request->codigo,
             municipio: $request->municipio,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto);
@@ -1884,7 +1558,7 @@ class MunicipioController extends Controller
 }
 ```
 
-#### app/Http/Controllers/Api/Patrocinados/ComunidadController.php
+#### `app/Http/Controllers/Api/Patrocinados/ComunidadController.php`
 
 ```php
 <?php
@@ -1897,9 +1571,7 @@ use App\Application\Geografia\Commands\UpdateComunidadCommand;
 use App\Application\Geografia\Handlers\CreateComunidadHandler;
 use App\Application\Geografia\Handlers\DeleteComunidadHandler;
 use App\Application\Geografia\Handlers\UpdateComunidadHandler;
-use App\Application\Geografia\Queries\GetComunidadByIdQuery;
 use App\Application\Geografia\Queries\GetComunidadesQuery;
-use App\Application\Geografia\QueryHandlers\GetComunidadByIdQueryHandler;
 use App\Application\Geografia\QueryHandlers\GetComunidadesQueryHandler;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Patrocinados\Geografia\StoreComunidadRequest;
@@ -1912,7 +1584,6 @@ class ComunidadController extends Controller
 {
     public function __construct(
         private readonly GetComunidadesQueryHandler $getComunidadesHandler,
-        private readonly GetComunidadByIdQueryHandler $getComunidadByIdHandler,
         private readonly CreateComunidadHandler $createHandler,
         private readonly UpdateComunidadHandler $updateHandler,
         private readonly DeleteComunidadHandler $deleteHandler,
@@ -1920,21 +1591,12 @@ class ComunidadController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $pagination = PaginationDTO::fromArray($request->all(), 'comunidad');
+        $pagination = PaginationDTO::fromArray($request->all());
 
-        return response()->json(
-            $this->getComunidadesHandler->handle(new GetComunidadesQuery(
-                $pagination,
-                $request->string('municipio_id')->toString() ?: null,
-            ))
-        );
-    }
-
-    public function show(string $id): JsonResponse
-    {
-        return response()->json(
-            $this->getComunidadByIdHandler->handle(new GetComunidadByIdQuery($id))
-        );
+        return response()->json($this->getComunidadesHandler->handle(new GetComunidadesQuery(
+            pagination: $pagination,
+            municipio_id: $request->get('municipio_id'),
+        )));
     }
 
     public function store(StoreComunidadRequest $request): JsonResponse
@@ -1944,7 +1606,6 @@ class ComunidadController extends Controller
             codigo: $request->codigo,
             comunidad: $request->comunidad,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto, 201);
@@ -1958,7 +1619,6 @@ class ComunidadController extends Controller
             codigo: $request->codigo,
             comunidad: $request->comunidad,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto);
@@ -1973,7 +1633,7 @@ class ComunidadController extends Controller
 }
 ```
 
-#### app/Http/Controllers/Api/Patrocinados/UbicacionController.php
+#### `app/Http/Controllers/Api/Patrocinados/UbicacionController.php`
 
 ```php
 <?php
@@ -1986,9 +1646,7 @@ use App\Application\Geografia\Commands\UpdateUbicacionCommand;
 use App\Application\Geografia\Handlers\CreateUbicacionHandler;
 use App\Application\Geografia\Handlers\DeleteUbicacionHandler;
 use App\Application\Geografia\Handlers\UpdateUbicacionHandler;
-use App\Application\Geografia\Queries\GetUbicacionByIdQuery;
 use App\Application\Geografia\Queries\GetUbicacionesQuery;
-use App\Application\Geografia\QueryHandlers\GetUbicacionByIdQueryHandler;
 use App\Application\Geografia\QueryHandlers\GetUbicacionesQueryHandler;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Patrocinados\Geografia\StoreUbicacionRequest;
@@ -2001,7 +1659,6 @@ class UbicacionController extends Controller
 {
     public function __construct(
         private readonly GetUbicacionesQueryHandler $getUbicacionesHandler,
-        private readonly GetUbicacionByIdQueryHandler $getUbicacionByIdHandler,
         private readonly CreateUbicacionHandler $createHandler,
         private readonly UpdateUbicacionHandler $updateHandler,
         private readonly DeleteUbicacionHandler $deleteHandler,
@@ -2009,21 +1666,12 @@ class UbicacionController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $pagination = PaginationDTO::fromArray($request->all(), 'nombre');
+        $pagination = PaginationDTO::fromArray($request->all());
 
-        return response()->json(
-            $this->getUbicacionesHandler->handle(new GetUbicacionesQuery(
-                $pagination,
-                $request->string('comunidad_id')->toString() ?: null,
-            ))
-        );
-    }
-
-    public function show(string $id): JsonResponse
-    {
-        return response()->json(
-            $this->getUbicacionByIdHandler->handle(new GetUbicacionByIdQuery($id))
-        );
+        return response()->json($this->getUbicacionesHandler->handle(new GetUbicacionesQuery(
+            pagination: $pagination,
+            comunidad_id: $request->get('comunidad_id'),
+        )));
     }
 
     public function store(StoreUbicacionRequest $request): JsonResponse
@@ -2037,7 +1685,6 @@ class UbicacionController extends Controller
             longitude: (float) $request->longitude,
             precision_metros: $request->precision_metros !== null ? (float) $request->precision_metros : null,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto, 201);
@@ -2055,7 +1702,6 @@ class UbicacionController extends Controller
             longitude: (float) $request->longitude,
             precision_metros: $request->precision_metros !== null ? (float) $request->precision_metros : null,
             estado: $request->boolean('estado', true),
-            updated_by: auth()->id(),
         ));
 
         return response()->json($dto);
@@ -2072,7 +1718,7 @@ class UbicacionController extends Controller
 
 ### Requests
 
-#### app/Http/Requests/Patrocinados/Geografia/StoreDepartamentoRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/StoreDepartamentoRequest.php`
 
 ```php
 <?php
@@ -2091,15 +1737,15 @@ class StoreDepartamentoRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'codigo' => ['nullable', 'string', 'max:30', 'unique:pgsql_patrocinados.departamento,codigo'],
+            'codigo'       => ['nullable', 'string', 'max:30', 'unique:pgsql_patrocinados.departamento,codigo'],
             'departamento' => ['required', 'string', 'max:150'],
-            'estado' => ['sometimes', 'boolean'],
+            'estado'       => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/UpdateDepartamentoRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/UpdateDepartamentoRequest.php`
 
 ```php
 <?php
@@ -2119,18 +1765,15 @@ class UpdateDepartamentoRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'codigo' => [
-                'nullable', 'string', 'max:30',
-                Rule::unique('pgsql_patrocinados.departamento', 'codigo')->ignore($this->route('id')),
-            ],
+            'codigo'       => ['nullable', 'string', 'max:30', Rule::unique('pgsql_patrocinados.departamento', 'codigo')->ignore($this->route('id'))],
             'departamento' => ['required', 'string', 'max:150'],
-            'estado' => ['sometimes', 'boolean'],
+            'estado'       => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/StoreMunicipioRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/StoreMunicipioRequest.php`
 
 ```php
 <?php
@@ -2150,15 +1793,15 @@ class StoreMunicipioRequest extends FormRequest
     {
         return [
             'departamento_id' => ['required', 'uuid', 'exists:pgsql_patrocinados.departamento,id'],
-            'codigo' => ['nullable', 'string', 'max:30', 'unique:pgsql_patrocinados.municipios,codigo'],
-            'municipio' => ['required', 'string', 'max:150'],
-            'estado' => ['sometimes', 'boolean'],
+            'codigo'          => ['nullable', 'string', 'max:30', 'unique:pgsql_patrocinados.municipios,codigo'],
+            'municipio'       => ['required', 'string', 'max:150'],
+            'estado'          => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/UpdateMunicipioRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/UpdateMunicipioRequest.php`
 
 ```php
 <?php
@@ -2179,18 +1822,15 @@ class UpdateMunicipioRequest extends FormRequest
     {
         return [
             'departamento_id' => ['required', 'uuid', 'exists:pgsql_patrocinados.departamento,id'],
-            'codigo' => [
-                'nullable', 'string', 'max:30',
-                Rule::unique('pgsql_patrocinados.municipios', 'codigo')->ignore($this->route('id')),
-            ],
-            'municipio' => ['required', 'string', 'max:150'],
-            'estado' => ['sometimes', 'boolean'],
+            'codigo'          => ['nullable', 'string', 'max:30', Rule::unique('pgsql_patrocinados.municipios', 'codigo')->ignore($this->route('id'))],
+            'municipio'       => ['required', 'string', 'max:150'],
+            'estado'          => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/StoreComunidadRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/StoreComunidadRequest.php`
 
 ```php
 <?php
@@ -2210,16 +1850,15 @@ class StoreComunidadRequest extends FormRequest
     {
         return [
             'municipio_id' => ['required', 'uuid', 'exists:pgsql_patrocinados.municipios,id'],
-            // `codigo` no es UNIQUE en esta tabla (confirmado en la migración real).
-            'codigo' => ['nullable', 'string', 'max:30'],
-            'comunidad' => ['required', 'string', 'max:180'],
-            'estado' => ['sometimes', 'boolean'],
+            'codigo'       => ['nullable', 'string', 'max:30'],
+            'comunidad'    => ['required', 'string', 'max:180'],
+            'estado'       => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/UpdateComunidadRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/UpdateComunidadRequest.php`
 
 ```php
 <?php
@@ -2239,15 +1878,15 @@ class UpdateComunidadRequest extends FormRequest
     {
         return [
             'municipio_id' => ['required', 'uuid', 'exists:pgsql_patrocinados.municipios,id'],
-            'codigo' => ['nullable', 'string', 'max:30'],
-            'comunidad' => ['required', 'string', 'max:180'],
-            'estado' => ['sometimes', 'boolean'],
+            'codigo'       => ['nullable', 'string', 'max:30'],
+            'comunidad'    => ['required', 'string', 'max:180'],
+            'estado'       => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/StoreUbicacionRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/StoreUbicacionRequest.php`
 
 ```php
 <?php
@@ -2267,20 +1906,20 @@ class StoreUbicacionRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'comunidad_id' => ['required', 'uuid', 'exists:pgsql_patrocinados.comunidades,id'],
-            'nombre' => ['required', 'string', 'max:180'],
-            'tipo' => ['nullable', Rule::in(['DOMICILIO', 'ESCUELA', 'PUNTO_REFERENCIA', 'OTRO'])],
-            'direccion' => ['nullable', 'string'],
-            'latitude' => ['required', 'numeric', 'between:-90,90'],
-            'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'precision_metros' => ['nullable', 'numeric', 'min:0'],
-            'estado' => ['sometimes', 'boolean'],
+            'comunidad_id'      => ['required', 'uuid', 'exists:pgsql_patrocinados.comunidades,id'],
+            'nombre'            => ['required', 'string', 'max:180'],
+            'tipo'              => ['nullable', Rule::in(['DOMICILIO', 'ESCUELA', 'PUNTO_REFERENCIA', 'OTRO'])],
+            'direccion'         => ['nullable', 'string'],
+            'latitude'          => ['required', 'numeric', 'between:-90,90'],
+            'longitude'         => ['required', 'numeric', 'between:-180,180'],
+            'precision_metros'  => ['nullable', 'numeric', 'min:0'],
+            'estado'            => ['boolean'],
         ];
     }
 }
 ```
 
-#### app/Http/Requests/Patrocinados/Geografia/UpdateUbicacionRequest.php
+#### `app/Http/Requests/Patrocinados/Geografia/UpdateUbicacionRequest.php`
 
 ```php
 <?php
@@ -2300,15 +1939,37 @@ class UpdateUbicacionRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'comunidad_id' => ['required', 'uuid', 'exists:pgsql_patrocinados.comunidades,id'],
-            'nombre' => ['required', 'string', 'max:180'],
-            'tipo' => ['nullable', Rule::in(['DOMICILIO', 'ESCUELA', 'PUNTO_REFERENCIA', 'OTRO'])],
-            'direccion' => ['nullable', 'string'],
-            'latitude' => ['required', 'numeric', 'between:-90,90'],
-            'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'precision_metros' => ['nullable', 'numeric', 'min:0'],
-            'estado' => ['sometimes', 'boolean'],
+            'comunidad_id'      => ['required', 'uuid', 'exists:pgsql_patrocinados.comunidades,id'],
+            'nombre'            => ['required', 'string', 'max:180'],
+            'tipo'              => ['nullable', Rule::in(['DOMICILIO', 'ESCUELA', 'PUNTO_REFERENCIA', 'OTRO'])],
+            'direccion'         => ['nullable', 'string'],
+            'latitude'          => ['required', 'numeric', 'between:-90,90'],
+            'longitude'         => ['required', 'numeric', 'between:-180,180'],
+            'precision_metros'  => ['nullable', 'numeric', 'min:0'],
+            'estado'            => ['boolean'],
         ];
     }
 }
+```
+
+---
+
+## Rutas de referencia (para `routes/api/patrocinados.php`, se cablean formalmente en la Etapa 1/9)
+
+```php
+Route::apiResource('departamentos', DepartamentoController::class)
+    ->only(['index', 'store', 'update', 'destroy'])
+    ->middleware('permiso-patrocinados:geografia.ver|crear|editar|eliminar');
+
+Route::apiResource('municipios', MunicipioController::class)
+    ->only(['index', 'store', 'update', 'destroy'])
+    ->middleware('permiso-patrocinados:geografia.ver|crear|editar|eliminar');
+
+Route::apiResource('comunidades', ComunidadController::class)
+    ->only(['index', 'store', 'update', 'destroy'])
+    ->middleware('permiso-patrocinados:geografia.ver|crear|editar|eliminar');
+
+Route::apiResource('ubicaciones', UbicacionController::class)
+    ->only(['index', 'store', 'update', 'destroy'])
+    ->middleware('permiso-patrocinados:geografia.ver|crear|editar|eliminar');
 ```
