@@ -26,6 +26,10 @@ class AccesoPatrocinadosSeeder extends Seeder
         'visitas.ver', 'visitas.crear', 'visitas.editar',
         'patrocinados.ver',
         'geografia.ver',
+        // Sin esto, un técnico no puede ni siquiera consultar el estado de su
+        // propio dispositivo (GET /dispositivos/{id} exige dispositivos.ver) —
+        // detectado al implementar geopatrocinados_app, Fase 1 (Dispositivos).
+        'dispositivos.ver',
     ];
 
     private const PERMISOS_SUPERVISOR = [
