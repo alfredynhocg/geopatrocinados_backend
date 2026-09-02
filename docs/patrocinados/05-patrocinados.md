@@ -118,3 +118,7 @@ GET/POST      /api/v1/patrocinados/tipos-parentescos
 - [ ] `UpdatePatrocinadoHandler` rechaza (422 o simplemente ignora) cualquier intento de modificar `comunidad_id`/`ubicacion_id` fuera del Handler dedicado.
 - [ ] Un usuario sin `patrocinados.ver-detalle` recibe `PatrocinadoResumenDTO` en el listado, verificado por test de Feature comparando las claves del JSON.
 - [ ] Borrar un `patrocinado` es soft-delete; sus `tutores` e `historial_ubicaciones` permanecen consultables para auditoría.
+
+## Código completo
+
+Ver [codigo/05-patrocinados-codigo.md](codigo/05-patrocinados-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

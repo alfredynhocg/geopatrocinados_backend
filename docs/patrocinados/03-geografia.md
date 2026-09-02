@@ -99,3 +99,7 @@ Todos con `->middleware('permiso-patrocinados:geografia.ver|crear|editar|elimina
 - [ ] Actualizar solo `latitude` de una ubicación existente y confirmar que `punto_geografico` se recalculó (test específico para la regla de derivación).
 - [ ] Listado paginado de `municipios` filtrado por `departamento_id` funciona con `->paginate()`.
 - [ ] Borrar un `departamento` con municipios asociados falla por FK (no hay cascade documentado en el docx — confirmar que es intencional; si negocio pide cascade, usar `onDelete('restrict')` explícito, no el default implícito).
+
+## Código completo
+
+Ver [codigo/03-geografia-codigo.md](codigo/03-geografia-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

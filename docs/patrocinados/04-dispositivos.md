@@ -88,3 +88,11 @@ POST    /api/v1/patrocinados/dispositivos/{id}/revocar     permiso-patrocinados:
 - [ ] Registrar el mismo `identificador_dispositivo` dos veces lanza `DispositivoYaRegistradoException` (422), no un error 500 de constraint violado sin capturar.
 - [ ] Un dispositivo `REVOCADO` no puede solicitar una nueva `habilitacion_visita` (validación cruzada que se implementa/testea completa recién en la Etapa 6, pero el estado debe quedar bien modelado desde aquí).
 - [ ] `AprobarDispositivoHandler` y `RevocarDispositivoHandler` registran en `registros_auditoria` (aunque el servicio genérico se construya recién en la Etapa 8 — dejar el `TODO` explícito y la llamada comentada si se implementa antes que la Etapa 8, o reordenar para hacer primero un `AuditoriaService` mínimo).
+
+## Código completo
+
+Ver [codigo/04-dispositivos-codigo.md](codigo/04-dispositivos-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.
+
+## Código completo
+
+Ver [codigo/04-dispositivos-codigo.md](codigo/04-dispositivos-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

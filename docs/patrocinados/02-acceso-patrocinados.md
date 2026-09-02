@@ -132,3 +132,11 @@ Registrar el alias en `bootstrap/app.php` junto al resto de middlewares.
 - [ ] `permiso-patrocinados:x.y` bloquea con 403 a un usuario sin el rol/permiso correspondiente.
 - [ ] Ningún DTO de `Usuario` expone `password_hash`.
 - [ ] Seeder corre limpio en una BD `pgsql_patrocinados` vacía.
+
+## Código completo
+
+Ver [codigo/02-acceso-patrocinados-codigo.md](codigo/02-acceso-patrocinados-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa, el middleware `PermisoPatrocinadosMiddleware`, el seeder inicial y el extracto de rutas.
+
+## Código completo
+
+Ver [codigo/02-acceso-patrocinados-codigo.md](codigo/02-acceso-patrocinados-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

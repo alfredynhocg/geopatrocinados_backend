@@ -98,3 +98,7 @@ POST /api/v1/patrocinados/sincronizacion/lotes/{loteId}/cerrar
 - [ ] Un lote con 10 elementos donde 1 tiene conflicto de versión termina con 9 `SINCRONIZADO` y 1 `ERROR` — el lote se cierra igual, no se aborta completo.
 - [ ] `ProcesarElementoSincronizacionHandler` con `tipo_entidad = 'visita'` y `operacion = 'UPDATE'` termina llamando efectivamente a los Handlers de la Etapa 6 (test de integración, no solo mock).
 - [ ] Reintentar un elemento ya `SINCRONIZADO` (reenvío duplicado por reintento de red del cliente) es idempotente — no duplica el efecto (usar `entidad_id` + `hash_datos` para detectar reenvíos).
+
+## Código completo
+
+Ver [codigo/07-sincronizacion-codigo.md](codigo/07-sincronizacion-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

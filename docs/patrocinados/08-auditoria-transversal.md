@@ -117,3 +117,7 @@ Solo lectura, `->middleware('permiso-patrocinados:auditoria.ver')` — típicame
 - [ ] Cada Handler de la tabla "qué se audita" tiene un test que verifica la fila insertada en `registros_auditoria` con `valores_anteriores`/`valores_nuevos` correctos.
 - [ ] `AuditoriaService::registrar()` nunca lanza una excepción que aborte la transacción de negocio (si falla el insert de auditoría, se loguea a `Log::error()` pero no revierte la operación principal — a decidir explícitamente: ¿es aceptable perder un registro de auditoría antes que bloquear una visita? Confirmar con negocio; si la respuesta es "no, la auditoría es obligatoria", entonces sí debe abortar la transacción).
 - [ ] El endpoint de listado pagina correctamente con `->paginate()` sobre una tabla de alto volumen (verificar plan de query con `EXPLAIN` si el volumen esperado es alto desde el día 1).
+
+## Código completo
+
+Ver [codigo/08-auditoria-codigo.md](codigo/08-auditoria-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.

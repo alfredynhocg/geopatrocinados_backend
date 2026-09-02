@@ -141,3 +141,7 @@ Middleware relevante: las rutas de captura de evidencia (`ubicaciones`, `observa
 - [ ] `RevisarVisitaHandler` deja `visitas.estado_revision` igual al `Estado` de la última fila insertada en `revisiones_visitas`.
 - [ ] La regla de reprogramación (una vez cerrada con negocio) tiene su propio test de escenario completo: 1ra visita no encontrada → reprogramada a 3 meses → 2da no encontrada → decisión de baja → `estados_patrocinados` del niño actualizado.
 - [ ] Fotos: el endpoint de listado nunca devuelve `clave_almacenamiento` cruda, solo una URL firmada de corta duración.
+
+## Código completo
+
+Ver [codigo/06-visitas-codigo.md](codigo/06-visitas-codigo.md) — código PHP completo de cada archivo de la Estructura DDD de esta etapa.
