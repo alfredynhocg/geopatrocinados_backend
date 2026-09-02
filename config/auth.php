@@ -16,6 +16,14 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // Guard aislado del módulo Patrocinados — nunca comparte tokens ni
+        // provider con 'sanctum' (mentabit, conexión mysql). Ver
+        // App\Infrastructure\AccesoPatrocinados\Guards\PatrocinadosTokenGuard.
+        'patrocinados' => [
+            'driver' => 'patrocinados',
+            'provider' => null,
+        ],
     ],
 
     

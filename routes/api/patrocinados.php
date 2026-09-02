@@ -33,13 +33,13 @@ Route::prefix('patrocinados')->group(function () {
     // Etapa 2 — AccesoPatrocinados -------------------------------------------------
     Route::prefix('auth')->group(function () {
         Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
-        Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('auth:patrocinados')->group(function () {
             Route::post('/logout', [AuthController::class, 'logout']);
             Route::get('/me', [AuthController::class, 'me']);
         });
     });
 
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware('auth:patrocinados')->group(function () {
         Route::get('/usuarios', [UsuarioController::class, 'index'])->middleware('permiso-patrocinados:usuarios.ver');
         Route::post('/usuarios', [UsuarioController::class, 'store'])->middleware('permiso-patrocinados:usuarios.crear');
         Route::get('/usuarios/{id}', [UsuarioController::class, 'show'])->middleware('permiso-patrocinados:usuarios.ver');
@@ -156,7 +156,7 @@ Route::prefix('patrocinados')->group(function () {
     });
 
     // Etapa 7 — Sincronizacion (autenticado con el token del dispositivo, no requiere permiso-patrocinados) ---
-    Route::middleware('auth:sanctum')->prefix('sincronizacion')->group(function () {
+    Route::middleware('auth:patrocinados')->prefix('sincronizacion')->group(function () {
         Route::post('/lotes', [SincronizacionController::class, 'iniciarLote']);
         Route::post('/lotes/{loteId}/elementos', [SincronizacionController::class, 'procesarElemento']);
         Route::post('/lotes/{loteId}/cerrar', [SincronizacionController::class, 'cerrarLote']);

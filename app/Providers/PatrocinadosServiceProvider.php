@@ -54,10 +54,17 @@ use App\Infrastructure\Visitas\Repositories\EloquentPlanVisitaRepository;
 use App\Infrastructure\Visitas\Repositories\EloquentRevisionVisitaRepository;
 use App\Infrastructure\Visitas\Repositories\EloquentUbicacionVisitaRepository;
 use App\Infrastructure\Visitas\Repositories\EloquentVisitaRepository;
+use App\Infrastructure\AccesoPatrocinados\Guards\PatrocinadosTokenGuard;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\ServiceProvider;
 
 class PatrocinadosServiceProvider extends ServiceProvider
 {
+    public function boot(): void
+    {
+        Auth::viaRequest('patrocinados', new PatrocinadosTokenGuard());
+    }
+
     public function register(): void
     {
         // Etapa 2 — AccesoPatrocinados

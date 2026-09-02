@@ -946,6 +946,18 @@ php artisan db:seed --class="Database\Seeders\Patrocinados\AccesoPatrocinadosSee
 
 Listado completo (~90 endpoints) en `routes/api/patrocinados.php`.
 
+### Autenticación: guard propio, no `auth:sanctum`
+
+El módulo usa el guard **`patrocinados`** (`->middleware('auth:patrocinados')`), no `auth:sanctum` directamente. Motivo verificado en runtime (no solo teórico): `Usuario::createToken()` guarda el token en `personal_access_tokens` de `pgsql_patrocinados` correctamente (Eloquent propaga la conexión del padre al crear vía la relación `morphMany`), pero `Laravel\Sanctum\PersonalAccessToken::findToken()` — el método **estático** que Sanctum usa para autenticar cada request — no hereda conexión de ningún padre y por default cae en la conexión `mysql` (la de mentabit), rompiendo la autenticación de todos los requests posteriores al login.
+
+Solución implementada: `App\Infrastructure\AccesoPatrocinados\Models\PersonalAccessToken` (subclase de la de Sanctum con `UsaConexionPatrocinados`) + `App\Infrastructure\AccesoPatrocinados\Guards\PatrocinadosTokenGuard` (reimplementa la resolución de token de Sanctum contra esa subclase) + guard `patrocinados` en `config/auth.php`. **Nunca** usar `Sanctum::usePersonalAccessTokenModel()` para esto — es una config global que rompería los tokens de mentabit (`App\Models\User`, conexión mysql).
+
+Tabla `personal_access_tokens` propia en `pgsql_patrocinados` (migración `2026_09_02_000001`), con `tokenable_id` UUID (`uuidMorphs`, no el `morphs` bigint por defecto del stub de Sanctum) — es independiente de la tabla homónima en mysql.
+
+### Compatibilidad Postgres: evitar `latestOfMany()` en modelos con PK UUID
+
+`Visita::revisionVigente()` usaba `->latestOfMany('fecha_revision')`; Eloquent genera un `MAX(id)` como tie-breaker interno, y Postgres no tiene función `MAX()` para `uuid` (sí para `bigint`, que es lo que Eloquent asume por defecto). Falla con `SQLSTATE[42883]: function max(uuid) does not exist`, solo en runtime — no lo detecta el linter ni una revisión de código. Se reemplazó por un `hasOne(...)->orderByDesc('fecha_revision')` simple, que resuelve igual en eager/lazy loading sin agregados. **Regla general: en cualquier modelo de este módulo, evitar `latestOfMany()`/`oldestOfMany()` — usar `hasOne()->orderBy()` en su lugar.**
+
 ### Pendientes conocidos (no bloquean uso normal)
 
 - Mecanismo de cifrado de `fotos_visitas` (at-rest de disco vs. aplicativo) sin decidir con negocio — ver `FotoVisitaService`.

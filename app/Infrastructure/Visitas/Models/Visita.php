@@ -49,8 +49,16 @@ class Visita extends Model
         return $this->hasMany(FotoVisita::class, 'visita_id');
     }
 
+    /**
+     * No usa ->latestOfMany(): esa implementación de Eloquent genera un
+     * MAX(id) como tie-breaker, y Postgres no tiene la función MAX() para
+     * columnas UUID (funciona con bigint, que es lo que asume por defecto).
+     * Un hasOne simple con orderByDesc resuelve igual la fila más reciente
+     * tanto en lazy como en eager loading (Eloquent toma la primera fila del
+     * resultado por padre, respetando el ORDER BY de la query).
+     */
     public function revisionVigente()
     {
-        return $this->hasOne(RevisionVisita::class, 'visita_id')->latestOfMany('fecha_revision');
+        return $this->hasOne(RevisionVisita::class, 'visita_id')->orderByDesc('fecha_revision');
     }
 }

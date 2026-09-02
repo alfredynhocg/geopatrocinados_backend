@@ -85,5 +85,21 @@ class AccesoPatrocinadosSeeder extends Seeder
             ],
         );
         $admin->roles()->syncWithoutDetaching([$superadmin->id]);
+
+        // Usuario demo con rol TECNICO_CAMPO — usado por los seeders de Visitas
+        // para tener a quién asignar las visitas de prueba.
+        $tecnico = Usuario::firstOrCreate(
+            ['username' => 'tecnico1'],
+            [
+                'email'         => 'tecnico1@patrocinados.local',
+                'password_hash' => Hash::make('changeme123'),
+                'nombres'       => 'Juan',
+                'apellidos'     => 'Pérez (técnico demo)',
+                'telefono'      => '70099887',
+                'estado'        => 'ACTIVO',
+                'updated_by'    => $admin->id,
+            ],
+        );
+        $tecnico->roles()->syncWithoutDetaching([$tecnicoCampo->id]);
     }
 }
