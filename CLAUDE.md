@@ -850,7 +850,7 @@ PagosYa → POST /pagosya/webhook
 | --- | --- | --- |
 | Motor de BD | MySQL 8, conexión `mysql` | **PostgreSQL 16 + PostGIS**, conexión propia `pgsql_patrocinados` |
 | PK | `bigIncrements` / compuesta (legado) | **UUID** (`HasUuids`) en todas las tablas salvo `registros_auditoria` (BIGINT autoincremental, insert-only) |
-| Auth | Sanctum + `t_usuario` + middleware `permiso:` | Sanctum multi-modelo con modelo `Usuario` propio + middleware `permiso-patrocinados:` (**no comparte usuarios ni permisos con mentabit**) |
+| Auth | Sanctum + `t_usuario` + middleware `permiso:` | Modelo `Usuario` propio + guard **`patrocinados`** (no `sanctum`, ver más abajo) + middleware `permiso-patrocinados:` (**no comparte usuarios, tokens ni permisos con mentabit**) |
 | Geolocalización | No aplica | `GEOGRAPHY(POINT,4326)` vía PostGIS, derivado siempre de `latitude`/`longitude` en el Repository (nunca aceptado directo del cliente) |
 | Rutas | `routes/api/v1.php` | `routes/api/patrocinados.php`, prefijo `/api/v1/patrocinados/...` |
 
@@ -904,9 +904,14 @@ PATROCINADOS_DB_DATABASE=patrocinados
 # Migrar solo este módulo (nunca con el comando de migración default, que apunta a MySQL)
 php artisan migrate --path=database/migrations/patrocinados --database=pgsql_patrocinados
 
-# Seed inicial (roles SUPERADMIN/TECNICO_CAMPO/SUPERVISOR, 29 permisos, primer superadmin)
+# Seed completo (acceso + geografía + patrocinados + visitas demo, en orden de dependencias)
+php artisan db:seed --class="Database\Seeders\Patrocinados\PatrocinadosDatabaseSeeder"
+
+# Solo acceso (roles SUPERADMIN/TECNICO_CAMPO/SUPERVISOR, 29 permisos, superadmin + técnico demo)
 php artisan db:seed --class="Database\Seeders\Patrocinados\AccesoPatrocinadosSeeder"
 ```
+
+Usuarios que deja el seed completo (password `changeme123` en ambos): `superadmin` (rol SUPERADMIN) y `tecnico1` (rol TECNICO_CAMPO).
 
 ### Módulos DDD y submódulos
 
