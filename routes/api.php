@@ -40,6 +40,8 @@ Route::middleware('auth:sanctum')->prefix('email')->group(function () {
 
 Route::prefix('v1')->group(base_path('routes/api/v1.php'));
 
+Route::prefix('v1')->group(base_path('routes/api/patrocinados.php'));
+
 Route::post('/pagosya/webhook', [PagoOnlineSessionController::class, 'webhook'])
     ->withoutMiddleware(['auth:sanctum']);
 

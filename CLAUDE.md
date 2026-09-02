@@ -837,3 +837,117 @@ PagosYa → POST /pagosya/webhook
 | POST | `/api/v1/inscripciones/{id}/devoluciones` | `DevolucionController@store` | `StoreDevolucionRequest` |
 | PATCH | `/api/v1/devoluciones/{id}/cancelar` | `DevolucionController@update` | `ResolverDevolucionRequest` |
 | PATCH | `/api/v1/devoluciones/{id}/resolver` | `DevolucionController@update` | `ResolverDevolucionRequest` |
+
+---
+
+## Módulo de Patrocinados / Visitas — Referencia completa
+
+> Bounded context nuevo, sin relación funcional con cursos/diplomados/pagos. Gestiona el seguimiento de visitas a niños patrocinados por una ONG de apadrinamiento (app móvil Flutter offline-first + este backend). Planificación completa en [docs/patrocinados/](docs/patrocinados/) (9 etapas + DDL + código PHP completo por módulo en `docs/patrocinados/codigo/`).
+
+### Diferencias de arquitectura frente al resto del proyecto
+
+| Aspecto | Resto del proyecto (mentabit) | Módulo Patrocinados |
+| --- | --- | --- |
+| Motor de BD | MySQL 8, conexión `mysql` | **PostgreSQL 16 + PostGIS**, conexión propia `pgsql_patrocinados` |
+| PK | `bigIncrements` / compuesta (legado) | **UUID** (`HasUuids`) en todas las tablas salvo `registros_auditoria` (BIGINT autoincremental, insert-only) |
+| Auth | Sanctum + `t_usuario` + middleware `permiso:` | Sanctum multi-modelo con modelo `Usuario` propio + middleware `permiso-patrocinados:` (**no comparte usuarios ni permisos con mentabit**) |
+| Geolocalización | No aplica | `GEOGRAPHY(POINT,4326)` vía PostGIS, derivado siempre de `latitude`/`longitude` en el Repository (nunca aceptado directo del cliente) |
+| Rutas | `routes/api/v1.php` | `routes/api/patrocinados.php`, prefijo `/api/v1/patrocinados/...` |
+
+### Reglas irrompibles del módulo
+
+```php
+// ❌ NUNCA: un modelo de este módulo sin el trait de conexión
+class Foo extends Model { use HasUuids; }
+
+// ✅ SIEMPRE: UsaConexionPatrocinados en todo modelo de los 7 submódulos
+class Foo extends Model {
+    use HasUuids, UsaConexionPatrocinados;
+}
+
+// ❌ NUNCA: transacción sin fijar la conexión explícitamente
+DB::transaction(fn () => ...);
+
+// ✅ SIEMPRE
+DB::connection('pgsql_patrocinados')->transaction(fn () => ...);
+
+// ❌ NUNCA: actualizar patrocinados.comunidad_id/ubicacion_id fuera de su Handler dedicado
+$patrocinado->update(['comunidad_id' => $x]); // en UpdatePatrocinadoHandler u otro lugar
+
+// ✅ SIEMPRE: único camino autorizado (ver EloquentPatrocinadoRepository::moverUbicacion())
+$this->cambiarUbicacionHandler->handle(new CambiarUbicacionPatrocinadoCommand(...));
+
+// ❌ NUNCA: reasignar una visita tocando solo visitas.user_id
+$visita->update(['user_id' => $nuevoTecnico]);
+
+// ✅ SIEMPRE: pasa por ReasignarVisitaHandler (cierra asignación activa + abre la nueva + actualiza visitas.user_id, misma transacción)
+
+// ❌ NUNCA: leer/inferir visitas.estado_revision desde la última fila de revisiones_visitas
+$estado = $visita->revisiones()->latest()->first()->estado;
+
+// ✅ SIEMPRE: RevisarVisitaHandler escribe revisiones_visitas y visitas.estado_revision en la misma transacción
+
+// ❌ NUNCA: exponer punto_geografico crudo o aceptar GEOGRAPHY del cliente
+'punto_geografico' => $request->punto,
+
+// ✅ SIEMPRE: el Repository deriva el punto de latitude/longitude (ST_MakePoint(lng, lat))
+```
+
+### Conexión y comandos
+
+```bash
+# .env — ver .env.example para todas las variables PATROCINADOS_DB_*
+PATROCINADOS_DB_HOST=127.0.0.1
+PATROCINADOS_DB_PORT=5432
+PATROCINADOS_DB_DATABASE=patrocinados
+
+# Migrar solo este módulo (nunca con el comando de migración default, que apunta a MySQL)
+php artisan migrate --path=database/migrations/patrocinados --database=pgsql_patrocinados
+
+# Seed inicial (roles SUPERADMIN/TECNICO_CAMPO/SUPERVISOR, 29 permisos, primer superadmin)
+php artisan db:seed --class="Database\Seeders\Patrocinados\AccesoPatrocinadosSeeder"
+```
+
+### Módulos DDD y submódulos
+
+| Módulo | Tablas | Entidad raíz |
+| --- | --- | --- |
+| `AccesoPatrocinados` | `usuarios`, `roles`, `permisos`, `usuarios_roles`, `roles_permisos` | `Usuario` (auth propia, `HasApiTokens`) |
+| `Geografia` | `departamento`, `municipios`, `comunidades`, `ubicaciones` | Catálogo territorial + PostGIS |
+| `Dispositivos` | `dispositivos` | Ciclo de vida PENDIENTE→ACTIVO→REVOCADO |
+| `Patrocinados` | `estados_patrocinados`, `patrocinados`, `tipos_parentescos`, `tutores`, `historial_ubicaciones` | `Patrocinado` (dato de menor de edad — ver DTO reducido) |
+| `Visitas` | 10 tablas (`visitas`, `planes_visitas`, `asignaciones_visitas`, `habilitaciones_visitas`, `ubicaciones_visitas`, `observaciones_visitas`, `fotos_visitas`, `revisiones_visitas`, `motivos_visitas`, `categorias_observaciones`) | `Visita` — núcleo operativo |
+| `Sincronizacion` | `lotes_sincronizacion`, `elementos_sincronizacion` | Sync offline Flutter, idempotente por lote/elemento |
+| `Auditoria` | `registros_auditoria` | `AuditoriaService`, transversal a los 6 módulos anteriores |
+
+### Datos sensibles (menor de edad)
+
+`GetPatrocinadosQueryHandler` devuelve `PatrocinadoResumenDTO` (sin tutor, sin dirección, edad aproximada) salvo que el usuario tenga el permiso `patrocinados.ver-detalle` — la decisión se toma en el QueryHandler, nunca en el Controller.
+
+### Endpoints principales
+
+| Método | Ruta | Controller@método |
+| --- | --- | --- |
+| POST | `/api/v1/patrocinados/auth/login` | `AuthController@login` |
+| GET/POST | `/api/v1/patrocinados/usuarios` | `UsuarioController@index/store` |
+| GET/POST | `/api/v1/patrocinados/ninos` | `PatrocinadoController@index/store` |
+| POST | `/api/v1/patrocinados/ninos/{id}/cambiar-ubicacion` | `PatrocinadoController@cambiarUbicacion` |
+| GET/POST | `/api/v1/patrocinados/visitas` | `VisitaController@index/store` |
+| POST | `/api/v1/patrocinados/visitas/{id}/reasignar` | `VisitaController@reasignar` |
+| POST | `/api/v1/patrocinados/visitas/{id}/iniciar` | `VisitaController@iniciar` |
+| POST | `/api/v1/patrocinados/visitas/{id}/finalizar` | `VisitaController@finalizar` |
+| POST | `/api/v1/patrocinados/visitas/{id}/reprogramar` | `VisitaController@reprogramar` |
+| POST | `/api/v1/patrocinados/visitas/{visitaId}/habilitaciones` | `HabilitacionVisitaController@store` |
+| POST | `/api/v1/patrocinados/visitas/{visitaId}/ubicaciones` | `UbicacionVisitaController@store` |
+| POST | `/api/v1/patrocinados/visitas/{visitaId}/fotos` | `FotoVisitaController@store` |
+| GET/POST | `/api/v1/patrocinados/visitas/{visitaId}/revisiones` | `RevisionVisitaController@index/store` |
+| POST | `/api/v1/patrocinados/sincronizacion/lotes` | `SincronizacionController@iniciarLote` |
+| GET | `/api/v1/patrocinados/registros-auditoria` | `RegistroAuditoriaController@index` (solo lectura) |
+
+Listado completo (~90 endpoints) en `routes/api/patrocinados.php`.
+
+### Pendientes conocidos (no bloquean uso normal)
+
+- Mecanismo de cifrado de `fotos_visitas` (at-rest de disco vs. aplicativo) sin decidir con negocio — ver `FotoVisitaService`.
+- Adapters concretos de `SincronizacionRouterService` (`VisitaSyncAdapter`, etc.) pendientes: hoy despachar un elemento de sync lanza `InvalidArgumentException` para cualquier `tipo_entidad`.
+- `HabilitarDispositivoParaVisitaHandler` no captura aún la violación del índice único parcial `uq_habilitaciones_visitas_activa` como excepción de dominio (sí lo hace `ReasignarVisitaHandler` para asignaciones).

@@ -2,105 +2,104 @@
 
 namespace App\Infrastructure\Visitas\Repositories;
 
-use App\Application\Visitas\DTOs\VisitaDTO;
 use App\Domain\Visitas\Contracts\VisitaRepositoryInterface;
+use App\Domain\Visitas\Exceptions\VisitaNotFoundException;
 use App\Infrastructure\Visitas\Models\Visita;
-use App\Shared\Kernel\Support\SqlCompat;
-use Illuminate\Support\Facades\DB;
+use App\Shared\Kernel\DTOs\PaginationDTO;
 
+/**
+ * Único Repository de todo el módulo Visitas con métodos de escritura no genéricos
+ * (reasignarTecnico, actualizarEstado, actualizarEstadoRevision) — deliberado: son
+ * los únicos caminos válidos para tocar user_id / estado / estado_revision, según
+ * las reglas de sincronía documentadas en docs/patrocinados/06-visitas.md.
+ */
 class EloquentVisitaRepository implements VisitaRepositoryInterface
 {
-    public function create(array $data): VisitaDTO
+    public function paginate(PaginationDTO $pagination, array $filtros = []): array
     {
-        $model = Visita::create($data);
-        return VisitaDTO::fromModel($model);
-    }
+        $q = Visita::query()->with(['asignacionActiva', 'habilitacionActiva']);
 
-    public function stats(string $desde, string $hasta): array
-    {
-        $base = Visita::query()
-            ->whereDate('created_at', '>=', $desde)
-            ->whereDate('created_at', '<=', $hasta);
+        if (! empty($filtros['patrocinado_id'])) {
+            $q->where('patrocinado_id', $filtros['patrocinado_id']);
+        }
+        if (! empty($filtros['tecnico_id'])) {
+            $q->where('user_id', $filtros['tecnico_id']);
+        }
+        if (! empty($filtros['estado'])) {
+            $q->where('estado', $filtros['estado']);
+        }
+        if (! empty($filtros['desde'])) {
+            $q->whereDate('fecha_programada', '>=', $filtros['desde']);
+        }
+        if (! empty($filtros['hasta'])) {
+            $q->whereDate('fecha_programada', '<=', $filtros['hasta']);
+        }
 
-        $totalVisitas     = (clone $base)->count();
-        $sesionesUnicas   = (clone $base)->distinct('session_id')->count('session_id');
-        $duracionPromedio = (clone $base)->whereNotNull('duracion_seg')->avg('duracion_seg');
-        $paginaTop        = (clone $base)
-            ->select('ruta', DB::raw('COUNT(*) as visitas'))
-            ->groupBy('ruta')
-            ->orderByDesc('visitas')
-            ->first();
-
-        $topPaginas = (clone $base)
-            ->select('ruta', DB::raw('COUNT(*) as visitas'))
-            ->groupBy('ruta')
-            ->orderByDesc('visitas')
-            ->limit(10)
-            ->get()
-            ->map(fn ($r) => ['ruta' => $r->ruta, 'visitas' => (int) $r->visitas]);
-
-        $porDia = (clone $base)
-            ->select(DB::raw('DATE(created_at) as fecha'), DB::raw('COUNT(*) as visitas'))
-            ->groupByRaw('DATE(created_at)')
-            ->orderBy('fecha')
-            ->get()
-            ->map(fn ($r) => ['fecha' => $r->fecha, 'visitas' => (int) $r->visitas]);
-
-        $porHora = (clone $base)
-            ->select(DB::raw(SqlCompat::hour('created_at') . ' as hora'), DB::raw('COUNT(*) as visitas'))
-            ->groupByRaw(SqlCompat::hour('created_at'))
-            ->orderBy('hora')
-            ->get()
-            ->map(fn ($r) => ['hora' => (int) $r->hora, 'visitas' => (int) $r->visitas]);
-
-        $porPais = (clone $base)
-            ->select('pais', DB::raw('COUNT(*) as visitas'))
-            ->whereNotNull('pais')
-            ->groupBy('pais')
-            ->orderByDesc('visitas')
-            ->limit(15)
-            ->get()
-            ->map(fn ($r) => ['pais' => $r->pais, 'visitas' => (int) $r->visitas]);
-
-        $porDispositivo = (clone $base)
-            ->select('dispositivo', DB::raw('COUNT(*) as visitas'))
-            ->whereNotNull('dispositivo')
-            ->groupBy('dispositivo')
-            ->get()
-            ->map(fn ($r) => ['dispositivo' => $r->dispositivo, 'visitas' => (int) $r->visitas]);
-
-        $porNavegador = (clone $base)
-            ->select('navegador', DB::raw('COUNT(*) as visitas'))
-            ->whereNotNull('navegador')
-            ->groupBy('navegador')
-            ->orderByDesc('visitas')
-            ->limit(8)
-            ->get()
-            ->map(fn ($r) => ['navegador' => $r->navegador, 'visitas' => (int) $r->visitas]);
-
-        $porSO = (clone $base)
-            ->select('so', DB::raw('COUNT(*) as visitas'))
-            ->whereNotNull('so')
-            ->groupBy('so')
-            ->orderByDesc('visitas')
-            ->limit(8)
-            ->get()
-            ->map(fn ($r) => ['so' => $r->so, 'visitas' => (int) $r->visitas]);
+        $paginated = $q->orderBy('fecha_programada', 'desc')
+            ->paginate($pagination->pageSize, ['*'], 'page', $pagination->pageIndex);
 
         return [
-            'kpis' => [
-                'total_visitas'     => $totalVisitas,
-                'sesiones_unicas'   => $sesionesUnicas,
-                'duracion_promedio' => $duracionPromedio ? (int) round((float) $duracionPromedio) : null,
-                'pagina_top'        => $paginaTop?->ruta,
-            ],
-            'top_paginas'     => $topPaginas,
-            'por_dia'         => $porDia,
-            'por_hora'        => $porHora,
-            'por_pais'        => $porPais,
-            'por_dispositivo' => $porDispositivo,
-            'por_navegador'   => $porNavegador,
-            'por_so'          => $porSO,
+            'data'  => collect($paginated->items())->map(fn ($v) => \App\Application\Visitas\DTOs\VisitaDTO::fromModel($v))->all(),
+            'total' => $paginated->total(),
         ];
+    }
+
+    public function findById(string $id): mixed
+    {
+        return Visita::with(['asignacionActiva', 'habilitacionActiva', 'observaciones', 'fotos', 'revisionVigente'])->find($id);
+    }
+
+    public function create(array $data): mixed
+    {
+        return Visita::create($data);
+    }
+
+    public function update(string $id, array $data): mixed
+    {
+        $model = $this->obtenerOFallar($id);
+        $model->update($data);
+        return $model->refresh();
+    }
+
+    public function delete(string|array $ids): bool
+    {
+        return (bool) Visita::destroy($ids);
+    }
+
+    public function actualizarEstado(string $id, array $data): mixed
+    {
+        $model = $this->obtenerOFallar($id);
+        $model->update($data);
+        return $model->refresh();
+    }
+
+    public function reasignarTecnico(string $id, string $nuevoUserId): mixed
+    {
+        $model = $this->obtenerOFallar($id);
+        $model->update(['user_id' => $nuevoUserId]);
+        return $model->refresh();
+    }
+
+    public function actualizarEstadoRevision(string $id, string $estadoRevision): mixed
+    {
+        $model = $this->obtenerOFallar($id);
+        $model->update(['estado_revision' => $estadoRevision]);
+        return $model->refresh();
+    }
+
+    public function existeAsignacionActiva(string $visitaId): bool
+    {
+        return \App\Infrastructure\Visitas\Models\AsignacionVisita::where('visita_id', $visitaId)
+            ->where('estado', true)
+            ->exists();
+    }
+
+    private function obtenerOFallar(string $id): Visita
+    {
+        $model = Visita::find($id);
+        if (! $model) {
+            throw new VisitaNotFoundException($id);
+        }
+        return $model;
     }
 }

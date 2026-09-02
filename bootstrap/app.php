@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'rate.portal' => \App\Http\Middleware\RateLimitPortal::class,
             'encrypt.portal' => \App\Http\Middleware\EncryptApiResponse::class,
             'portal.key' => \App\Http\Middleware\ValidarPortalKey::class,
+            'permiso-patrocinados' => \App\Http\Middleware\PermisoPatrocinadosMiddleware::class,
         ]);
 
         $middleware->redirectGuestsTo(fn ($request) => $request->is('api/*') ? null : '/login');
@@ -34,8 +35,8 @@ return Application::configure(basePath: dirname(__DIR__))
             if (! ($request->expectsJson() || $request->is('api/*'))) {
                 return null;
             }
-            if ($e->getCode() === 404) {
-                return response()->json(['error' => $e->getMessage()], 404);
+            if (in_array($e->getCode(), [401, 403, 404, 422], true)) {
+                return response()->json(['error' => $e->getMessage()], $e->getCode());
             }
 
             return null;
