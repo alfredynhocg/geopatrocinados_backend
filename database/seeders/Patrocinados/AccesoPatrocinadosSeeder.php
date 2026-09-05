@@ -33,11 +33,15 @@ class AccesoPatrocinadosSeeder extends Seeder
     ];
 
     private const PERMISOS_SUPERVISOR = [
-        'visitas.ver', 'visitas.revisar',
+        'visitas.ver', 'visitas.revisar', 'visitas.editar',
         'patrocinados.ver',
         'dispositivos.ver', 'dispositivos.aprobar', 'dispositivos.revocar',
         'geografia.ver',
         'auditoria.ver',
+        // Sin esto no puede listar técnicos para reasignar una visita
+        // (ReasignarVisitaRequest exige un nuevo_tecnico_id válido) —
+        // detectado al implementar geopatrocinados_app, Fase 3 (Visitas).
+        'usuarios.ver',
     ];
 
     public function run(): void
